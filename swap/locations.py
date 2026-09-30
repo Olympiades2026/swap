@@ -77,6 +77,19 @@ class Locations:
     def in_onedrive(self, path: str) -> bool:
         return any(is_under(path, root) for root in self.onedrive_roots())
 
+    def target_for(self, path: str) -> dict:
+        """Décrit `path` de façon portable (relatif à Documents, au profil...) pour le retrouver sur un autre poste."""
+        best = None
+        for name, base in self.known.items():
+            if is_under(path, base) and (best is None or len(base) > len(best[1])):
+                best = (name, base)
+        if best:
+            rel = os.path.relpath(path, best[1]).replace(os.sep, "/")
+            return {"kind": "known", "name": best[0], "rel": "" if rel == "." else rel}
+        if is_under(path, self.home):
+            return {"kind": "home", "rel": os.path.relpath(path, self.home).replace(os.sep, "/")}
+        return {"kind": "abs", "path": path}
+
     def resolve(self, target: dict) -> str:
         """Transforme une cible enregistrée dans la sauvegarde en chemin réel sur CE poste."""
         kind = target["kind"]

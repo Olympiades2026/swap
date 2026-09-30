@@ -29,13 +29,18 @@ CACHE_EXCLUDE_DIRS = {
 
 BIG_FILE = 500 * 1024 * 1024
 # Extensions dont on liste toujours l'emplacement exact (fichiers faciles à oublier).
-NOTABLE_EXTS = {".pst", ".kdbx", ".pfx", ".p12", ".ppk", ".ovpn", ".rdp", ".mdf", ".vhdx", ".vmdk", ".ova"}
+NOTABLE_EXTS = {".pst", ".kdbx", ".pfx", ".p12", ".ppk", ".ovpn", ".rdp", ".mdf", ".vhdx", ".vmdk", ".ova", ".wdp", ".wwp", ".wpp", ".fic"}
+NOTABLE_CAP = 300
 
 
 class Excluder:
-    def __init__(self, dirs=(), files=()):
+    def __init__(self, dirs=(), files=(), paths=()):
         self.dirs = {d.lower() for d in dirs}
         self.files = [f.lower() for f in files]
+        self.paths = {os.path.normcase(os.path.abspath(p)) for p in paths}  # dossiers exclus par chemin complet
+
+    def skip_path(self, path: str) -> bool:
+        return bool(self.paths) and os.path.normcase(os.path.abspath(path)) in self.paths
 
     def skip_dir(self, name: str) -> bool:
         return name.lower() in self.dirs
@@ -45,11 +50,11 @@ class Excluder:
         return any(fnmatch.fnmatchcase(low, pat) for pat in self.files)
 
 
-def make_excluder(cache: bool = False, extra=()) -> Excluder:
+def make_excluder(cache: bool = False, extra=(), paths=()) -> Excluder:
     dirs = set(BASE_EXCLUDE_DIRS) | {e.lower() for e in extra}
     if cache:
         dirs |= CACHE_EXCLUDE_DIRS
-    return Excluder(dirs, BASE_EXCLUDE_FILES)
+    return Excluder(dirs, BASE_EXCLUDE_FILES, paths)
 
 
 def attrs(st) -> int:
@@ -113,7 +118,7 @@ def walk(root: str, excluder: Optional[Excluder] = None, on_error: Optional[Call
                     child = os.path.join(cur, name)
                     child_rel = f"{rel}/{name}" if rel else name
                     if entry.is_dir(follow_symlinks=False):
-                        if not excluder.skip_dir(name):
+                        if not excluder.skip_dir(name) and not excluder.skip_path(child):
                             found.append(Entry("d", child, child_rel, st))
                     elif entry.is_file(follow_symlinks=False):
                         if not excluder.skip_file(name):
@@ -140,7 +145,7 @@ class TypeSink:
         ext = os.path.splitext(path)[1].lower()
         if ext:
             self.exts[ext] += 1
-        if ext in NOTABLE_EXTS and len(self.notable[ext]) < 50:
+        if ext in NOTABLE_EXTS and len(self.notable[ext]) < NOTABLE_CAP:
             self.notable[ext].append(path)
         if size >= BIG_FILE:
             item = (size, path)

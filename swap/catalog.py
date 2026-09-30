@@ -52,6 +52,17 @@ APP_CONFIGS = [
     AppConfig("polices", "Polices installées pour l'utilisateur", [("localappdata", "Microsoft/Windows/Fonts")]),
     AppConfig("keepass", "KeePass : configuration", [("appdata", "KeePass")],
               note="La base de mots de passe (.kdbx) est un fichier à part : voir « fichiers remarquables »."),
+    AppConfig("pcsoft-roaming", "PC SOFT (WinDev/WebDev) : réglages utilisateur", [("appdata", "PC SOFT")],
+              note="Réglages de l'éditeur. La licence n'est pas ici : voir les conseils PC SOFT."),
+    AppConfig("pcsoft-local", "PC SOFT : données locales", [("localappdata", "PC SOFT")], cache=True),
+    AppConfig("pcsoft-programdata", "PC SOFT : données partagées (ProgramData)", [("programdata", "PC SOFT")], default=False,
+              note="Peut contenir la configuration serveur HFSQL ou des licences : vérifier avant de cocher."),
+    AppConfig("heidisql", "HeidiSQL (sessions, historique)", [("appdata", "HeidiSQL")], registry=[r"HKCU\Software\HeidiSQL"],
+              sensitive=True, note="Les sessions (serveurs, mots de passe faiblement chiffrés) sont dans le registre."),
+    AppConfig("keepassxc", "KeePassXC : configuration", [("appdata", "KeePassXC")],
+              note="La base de mots de passe (.kdbx) est un fichier à part : voir « fichiers remarquables »."),
+    AppConfig("obsidian", "Obsidian : réglages et liste des coffres", [("appdata", "obsidian")]),
+    AppConfig("tightvnc", "TightVNC (serveur/viewer)", registry=[r"HKCU\Software\TightVNC"], sensitive=True),
     AppConfig("ssh", "Clés et configuration SSH", [("home", ".ssh")], sensitive=True,
               note="Contient des clés privées : n'utiliser qu'un support chiffré."),
     AppConfig("git", "Configuration Git", [("home", ".gitconfig")]),
@@ -125,6 +136,11 @@ APP_ADVICE = [
      "Messagerie/visio : reconnexion avec le compte ; les discussions sont côté serveur, pas besoin de les copier."),
     (r"python|node\.?js|java|jdk|golang|rust|\bgit\b|visual studio|jetbrains|intellij|pycharm|android studio", "info",
      "Outils de développement : réinstaller les versions utilisées (voir liste) ; les dossiers de projets sont copiés, mais pas node_modules/.venv (à régénérer)."),
+    (r"pc ?soft|windev|webdev|hfsql", "critique",
+     "PC SOFT (WinDev/WebDev/HFSQL) : 1) les licences (numéro + clé, ou dongle) sont à retrouver et à transférer/réactiver avec PC SOFT ou votre revendeur ; "
+     "2) réinstallez la MÊME version que celle de vos projets (un projet ouvert dans une version plus récente est converti) ; "
+     "3) les données HFSQL (.fic/.ndx/.mmo) ne se copient proprement qu'arrêtées (service ou application fermés) ou via une sauvegarde HFSQL Control Center ; "
+     "4) les dossiers de projets et de données sont repérés et proposés à part (« PC SOFT : projet… »), vous pouvez les rediriger avec une règle (fichier regles.txt)."),
     (r"wireguard", "important",
      "WireGuard : les tunnels sont stockés chiffrés par Windows et ne se copient pas. Dans l'application : « Exporter tous les tunnels vers un zip », "
      "puis les importer sur le nouveau poste."),
@@ -142,6 +158,12 @@ APP_ADVICE = [
 
 # Extensions -> (logiciel probable, regex pour le repérer dans les applis installées, conseil)
 EXT_HINTS = {
+    ".wdp": ("WinDev (projet)", r"windev|pc ?soft", "Projet WinDev : réinstaller la même version de WinDev."),
+    ".wwp": ("WebDev (projet)", r"webdev|pc ?soft", "Projet WebDev : réinstaller la même version de WebDev."),
+    ".wpp": ("WinDev Mobile (projet)", r"windev|pc ?soft", "Projet WinDev Mobile : réinstaller la même version."),
+    ".fic": ("Données HFSQL", r"hfsql|windev|webdev|pc ?soft", "Fichiers de données HFSQL : à copier applications/service arrêtés."),
+    ".ndx": ("Index HFSQL", r"hfsql|windev|webdev|pc ?soft", "Index des fichiers HFSQL (suivent les .fic)."),
+    ".mmo": ("Mémos HFSQL", r"hfsql|windev|webdev|pc ?soft", "Mémos des fichiers HFSQL (suivent les .fic)."),
     ".pst": ("Outlook (archives)", r"outlook|office", "Archive de courriers à rattacher dans Outlook sur le nouveau poste."),
     ".kdbx": ("KeePass", r"keepass", "Base de mots de passe : copier ET installer KeePass."),
     ".pfx": ("Certificat + clé privée", r"", "Garder le mot de passe du fichier ; à réimporter sur le nouveau poste."),

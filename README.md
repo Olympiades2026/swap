@@ -45,6 +45,26 @@ Copie les éléments cochés par défaut (ou choisis avec `-i`, `--only`, `--ski
 Ignorés volontairement : corbeille, caches des navigateurs, `node_modules`, `__pycache__`, `.venv`, fichiers temporaires et verrous Office (`~$*`).
 Les fichiers OneDrive « en ligne uniquement » ne sont **pas** téléchargés. Les dossiers Bureau/Documents redirigés vers OneDrive sont décochés par défaut (ils se resynchronisent sur le nouveau poste), tu peux les recocher.
 
+### Règles de destination (« les trucs PC SOFT arrivent dans `C:\Mes Projets` »)
+
+Par défaut chaque élément retourne à sa place d'origine (adaptée au nouveau profil). Pour l'envoyer ailleurs, écris une règle dans `swap-sortie\regles.txt` (créé par `scan`) :
+
+```
+# motif = dossier de destination
+pcsoft-projet  = C:\Mes Projets
+pcsoft-donnees = D:\Donnees HFSQL
+```
+
+ou en ligne de commande : `--map "pcsoft-projet=C:\Mes Projets"` (sur `copy` ou `restore`).
+- Le motif est cherché dans l'identifiant, le nom et le chemin d'origine de l'élément (les identifiants sont dans le rapport). `a|b` = « a ou b ».
+- Si une règle vise **plusieurs** éléments (ex. 3 projets), chacun est rangé dans un sous-dossier à son nom : `C:\Mes Projets\GestionStock`, `C:\Mes Projets\Site`…
+- La première règle qui correspond l'emporte. Les règles données à `copy` sont enregistrées dans la sauvegarde (donc appliquées par `RESTAURER.bat`) ; celles données à `restore` priment.
+- Utilise `restore --dry-run` : il affiche la destination de chaque élément sans rien écrire.
+
+### PC SOFT (WinDev / WebDev / HFSQL)
+
+L'analyse repère les projets (`.wdp`, `.wwp`, `.wpp`) et les données HFSQL (`.fic`, `.ndx`, `.mmo`) **où qu'ils soient** (Documents, `C:\Mes Projets`, un autre disque…). Chaque dossier de projet ou de données devient un élément à part (`pcsoft-projet-…`, `pcsoft-donnees-…`), donc redirigeable par une règle, et n'est pas copié en double avec son dossier parent. Le rapport rappelle les pièges : licences/dongle, même version de WinDev pour rouvrir les projets, copie des données HFSQL applications arrêtées.
+
 ### `verify`
 Compare la sauvegarde à son manifeste (fichiers manquants, tailles, et contenu avec `--deep`).
 

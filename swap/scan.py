@@ -60,6 +60,9 @@ class _Scanner:
 
     def add(self, item_id, label, kind, src, target, category, *, cache=False, extra=(), track=False, **kw):
         self.progress(f"Analyse : {label}")
+        base_id, n = item_id, 2
+        while any(i.id == item_id for i in self.items):
+            item_id, n = f"{base_id}-{n}", n + 1
         exc = make_excluder(cache=cache, extra=extra)
         stats = collect(src, exc, self.sink if track else None, self._tick(label))
         item = Item(
@@ -104,15 +107,17 @@ class _Scanner:
                      "Dossiers personnels", track=True)
 
     def app_configs(self):
-        roots = {"appdata": self.loc.appdata, "localappdata": self.loc.localappdata, "home": self.loc.home}
+        roots = {"appdata": self.loc.appdata, "localappdata": self.loc.localappdata, "home": self.loc.home,
+                 "programdata": os.environ.get("ProgramData", r"C:\ProgramData")}
         for cfg in APP_CONFIGS:
             for i, (root, rel) in enumerate(cfg.paths):
                 path = os.path.join(roots[root], *rel.split("/"))
                 if not os.path.exists(path):
                     continue
                 suffix = "" if len(cfg.paths) == 1 else f"-{i + 1}"
+                target = {"kind": "abs", "path": path} if root == "programdata" else {"kind": root, "rel": rel}
                 self.add(f"config-{cfg.id}{suffix}", cfg.label, "dir" if os.path.isdir(path) else "file", path,
-                         {"kind": root, "rel": rel}, "Configuration des applications", cache=cfg.cache,
+                         target, "Configuration des applications", cache=cfg.cache,
                          extra=cfg.extra_excludes, default=cfg.default, sensitive=cfg.sensitive, note=cfg.note)
             if is_windows():
                 for j, key in enumerate(cfg.registry):
@@ -169,6 +174,41 @@ def dedupe_overlaps(items: list) -> None:
                 break
 
 
+# extensions repérant une racine de projet/données PC SOFT -> (préfixe d'id, libellé)
+PCSOFT_ROOTS = {
+    ".wdp": ("pcsoft-projet", "PC SOFT : projet"),
+    ".wwp": ("pcsoft-projet", "PC SOFT : projet"),
+    ".wpp": ("pcsoft-projet", "PC SOFT : projet"),
+    ".fic": ("pcsoft-donnees", "PC SOFT : données HFSQL"),
+}
+
+
+def carve_out_roots(scanner: "_Scanner") -> None:
+    """Fait de chaque dossier de projet/données PC SOFT un élément à part (donc redirigeable par une règle)."""
+    found: dict = {}
+    for ext, (prefix, label) in PCSOFT_ROOTS.items():
+        for path in scanner.sink.notable.get(ext, []):
+            found.setdefault(os.path.dirname(path), (prefix, label))
+    roots = sorted(found, key=lambda p: len(p))
+    top = [r for r in roots if not any(o != r and is_under(r, o) and found[o][0] == found[r][0] for o in roots)]
+    for root in top:
+        prefix, label = found[root]
+        name = os.path.basename(root.rstrip("\\/")) or root
+        parents = [i for i in scanner.items if i.kind == "dir" and is_under(root, i.src) and os.path.normcase(i.src) != os.path.normcase(root)]
+        parent = max(parents, key=lambda i: len(i.src), default=None)
+        in_od = scanner.loc.in_onedrive(root)
+        item = scanner.add(f"{prefix}-{slugify(name)}", f"{label} {name}", "dir", root, scanner.loc.target_for(root),
+                           "PC SOFT (WinDev / WebDev / HFSQL)", default=not in_od,
+                           note="Dossier repéré grâce à ses fichiers PC SOFT ; redirigeable avec une règle de destination."
+                           + (" Fichiers HFSQL : à copier applications/service arrêtés." if prefix == "pcsoft-donnees" else ""))
+        if parent is not None:
+            parent.exclude_paths.append(root)
+            parent.size = max(0, parent.size - item.size)
+            parent.files = max(0, parent.files - item.files)
+            parent.note = (parent.note + " " if parent.note else "") + f"« {item.label} » en est extrait et traité à part."
+    # un dossier extrait ne doit plus être « déjà inclus » dans un parent : les éléments carved sont indépendants
+
+
 def run_scan(loc: Optional[Locations] = None, progress: Optional[Callable[[str], None]] = None, with_system: bool = True) -> dict:
     loc = loc or Locations.detect()
     scanner = _Scanner(loc, progress)
@@ -177,6 +217,7 @@ def run_scan(loc: Optional[Locations] = None, progress: Optional[Callable[[str],
     scanner.app_configs()
     scanner.outside_profile()
     dedupe_overlaps(scanner.items)
+    carve_out_roots(scanner)
 
     if progress:
         progress("Applications installées...")

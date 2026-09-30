@@ -11,6 +11,7 @@ import sys
 from . import __version__, transfer
 from .locations import Locations
 from .model import Item
+from .redirects import TEMPLATE, load_rules_file, parse_rules
 from .report import build_report
 from .scan import run_scan
 from .scripts import build_setup_script
@@ -18,6 +19,7 @@ from .util import human_size
 
 DEFAULT_OUT = "swap-sortie"
 INVENTORY = "inventaire.json"
+RULES_FILE = "regles.txt"
 
 
 def _progress(msg: str) -> None:
@@ -40,6 +42,7 @@ def write_outputs(inv: dict, out_dir: str) -> dict:
         "rapport_html": os.path.join(out_dir, "rapport.html"),
         "rapport_md": os.path.join(out_dir, "rapport.md"),
         "script": os.path.join(out_dir, "installer_et_configurer.ps1"),
+        "regles": os.path.join(out_dir, RULES_FILE),
     }
     with open(paths["inventaire"], "w", encoding="utf-8") as fh:
         json.dump(inv, fh, ensure_ascii=False, indent=1)
@@ -49,7 +52,17 @@ def write_outputs(inv: dict, out_dir: str) -> dict:
         fh.write(report.md())
     with open(paths["script"], "w", encoding="utf-8-sig", newline="") as fh:  # BOM : PowerShell 5 lit bien les accents
         fh.write(build_setup_script(inv))
+    if not os.path.exists(paths["regles"]):  # ne jamais écraser les règles déjà écrites par l'utilisateur
+        with open(paths["regles"], "w", encoding="utf-8-sig", newline="") as fh:
+            fh.write(TEMPLATE)
     return paths
+
+
+def _rules(args) -> list:
+    """Règles de destination : --map en ligne de commande, puis le fichier de règles."""
+    rules = parse_rules(args.map or [])
+    path = args.map_file or os.path.join(args.out, RULES_FILE)
+    return rules + load_rules_file(path)
 
 
 def cmd_scan(args) -> int:
@@ -68,6 +81,7 @@ def cmd_scan(args) -> int:
             print(f"  - {a['text']}")
     print(f"\nRapport détaillé : {paths['rapport_html']}")
     print(f"Script de reconfiguration (à lancer sur le nouveau poste) : {paths['script']}")
+    print(f"Règles de destination (ex. « les projets PC SOFT arrivent dans C:\\Mes Projets ») : {paths['regles']}")
     return 0
 
 
@@ -112,7 +126,13 @@ def cmd_copy(args) -> int:
         print("ATTENTION : la copie contient des données sensibles (🔒) : utilisez un support chiffré.")
     if not args.dry_run and not args.yes and input("Lancer la copie ? [O/n] ").strip().lower() in ("n", "non"):
         return 1
-    summary = transfer.run_backup(chosen, inv, args.dest, dry_run=args.dry_run, want_hash=args.hash, progress=_progress)
+    rules = _rules(args)
+    if rules:
+        print("Règles de destination enregistrées avec la sauvegarde :")
+        for pattern, dest in rules:
+            print(f"  {pattern}  →  {dest}")
+    summary = transfer.run_backup(chosen, inv, args.dest, dry_run=args.dry_run, want_hash=args.hash, progress=_progress,
+                                  redirects=rules)
     _end_progress()
     for item in chosen:
         r = summary["items"][item.id]
@@ -150,11 +170,14 @@ def cmd_restore(args) -> int:
     loc = Locations.detect()
     if not args.dry_run:
         print("Fermez les applications concernées (Outlook, navigateurs, VS Code...) avant de restaurer leur configuration.")
+    rules = parse_rules(args.map or []) + load_rules_file(args.map_file or os.path.join(args.backup, RULES_FILE))
     res = transfer.run_restore(args.backup, loc, only=args.only or (), skip=args.skip or (), overwrite=args.overwrite,
-                               dry_run=args.dry_run, interactive=args.interactive)
+                               dry_run=args.dry_run, interactive=args.interactive, rules=rules)
     for item_id, r in res["items"].items():
         print(f"  {item_id:45} {r['restored']:>7} restauré(s), {r['skipped']:>7} déjà présent(s)"
               + (f", {len(r['errors'])} erreur(s)" if r["errors"] else ""))
+        if r.get("dest"):
+            print(f"      → {r['dest']}")
     for e in res["errors"][:20]:
         print("  !", e)
     script = os.path.join(args.backup, "installer_et_configurer.ps1")
@@ -172,7 +195,7 @@ def menu() -> int:
     print(" 4) Restaurer sur le NOUVEAU poste")
     print(" q) Quitter")
     choice = input("\nVotre choix : ").strip().lower()
-    ns = argparse.Namespace(out=DEFAULT_OUT, inventory=None, no_system=False, only=None, skip=None, interactive=True, yes=False,
+    ns = argparse.Namespace(map=None, map_file=None, out=DEFAULT_OUT, inventory=None, no_system=False, only=None, skip=None, interactive=True, yes=False,
                             dry_run=False, hash=False, deep=False, overwrite=False)
     if choice == "1":
         return cmd_scan(ns)
@@ -205,6 +228,9 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--only", nargs="+", help="ne copier que les éléments dont le nom contient ces mots")
     c.add_argument("--skip", nargs="+", help="exclure les éléments dont le nom contient ces mots")
     c.add_argument("-i", "--interactive", action="store_true", help="choisir les éléments à la main")
+    c.add_argument("--map", action="append", metavar="MOTIF=DESTINATION",
+                   help="règle de destination, ex. --map \"pcsoft-projet=C:\\Mes Projets\" (répétable ; voir regles.txt)")
+    c.add_argument("--map-file", help="fichier de règles (défaut : regles.txt du dossier de sortie)")
     c.add_argument("--hash", action="store_true", help="calculer une empreinte SHA-256 de chaque fichier (plus lent)")
     c.add_argument("--dry-run", action="store_true", help="simuler sans rien écrire")
     c.add_argument("-y", "--yes", action="store_true", help="ne pas poser de question")
@@ -220,6 +246,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--only", nargs="+")
     r.add_argument("--skip", nargs="+")
     r.add_argument("-i", "--interactive", action="store_true")
+    r.add_argument("--map", action="append", metavar="MOTIF=DESTINATION", help="règle de destination (priment sur celles de la sauvegarde)")
+    r.add_argument("--map-file", help="fichier de règles (défaut : regles.txt de la sauvegarde)")
     r.add_argument("--overwrite", action="store_true", help="écraser les fichiers déjà présents (défaut : ne jamais écraser)")
     r.add_argument("--dry-run", action="store_true")
     r.set_defaults(func=cmd_restore)

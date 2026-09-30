@@ -20,6 +20,7 @@ class Item:
     sensitive: bool = False
     cache_excludes: bool = False
     extra_excludes: list = field(default_factory=list)
+    exclude_paths: list = field(default_factory=list)  # sous-dossiers traités comme éléments à part
     note: str = ""
 
     def to_dict(self) -> dict:

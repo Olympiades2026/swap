@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from swap import apps, cli, fs, transfer
+from swap import apps, cli, fs, redirects, transfer
 from swap.locations import Locations
 from swap.model import Item
 from swap.scan import dedupe_overlaps, run_scan
@@ -283,6 +283,119 @@ class TransferTests(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(backup, "data", "config-ssh")))
             self.assertEqual(cli.main(["verify", "--backup", backup]), 0)
             self.assertEqual(cli.main(["restore", "--backup", backup, "--dry-run"]), 0)
+
+
+class PcSoftTests(unittest.TestCase):
+    """Projets WinDev/WebDev et données HFSQL : repérés où qu'ils soient, extraits, redirigeables."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.loc = make_profile(self.tmp.name)
+        docs = self.loc.known["Documents"]
+        self.proj = os.path.join(docs, "Mes Projets", "GestionStock")
+        write(os.path.join(self.proj, "GestionStock.wdp"), "projet")
+        write(os.path.join(self.proj, "WIN_Main.wdw"), "fenetre")
+        write(os.path.join(self.proj, "Data", "CLIENT.fic"), "donnees")
+        write(os.path.join(self.proj, "Data", "CLIENT.ndx"), "index")
+        write(os.path.join(self.tmp.name, "home", "Projets", "web", "site.wwp"), "webdev")
+        self.inv = run_scan(self.loc)
+        self.by_id = {i["id"]: i for i in self.inv["items"]}
+        self.dest = os.path.join(self.tmp.name, "usb")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_roots_carved_out_as_separate_items(self):
+        for item_id in ("pcsoft-projet-gestionstock", "pcsoft-donnees-data", "pcsoft-projet-web"):
+            self.assertIn(item_id, self.by_id)
+        self.assertEqual(self.by_id["pcsoft-projet-gestionstock"]["category"], "PC SOFT (WinDev / WebDev / HFSQL)")
+        self.assertIn(self.proj, self.by_id["dossier-documents"]["exclude_paths"])
+        self.assertEqual(self.by_id["pcsoft-projet-gestionstock"]["exclude_paths"], [os.path.join(self.proj, "Data")])
+        # aucun octet compté deux fois
+        self.assertEqual(self.by_id["pcsoft-donnees-data"]["files"], 2)
+        self.assertEqual(self.by_id["pcsoft-projet-gestionstock"]["files"], 2)
+        self.assertEqual(self.by_id["dossier-documents"]["files"], 3)
+
+    def test_type_hints_and_advice_for_pcsoft(self):
+        exts = {h["ext"] for h in self.inv["type_hints"]}
+        self.assertTrue({".wdp", ".fic", ".wwp"} <= exts)
+
+    def test_no_duplicate_copy_and_portable_targets(self):
+        items = [Item.from_dict(d) for d in self.inv["items"] if d["default"]]
+        backup = transfer.run_backup(items, self.inv, self.dest)["backup"]
+        docs = os.path.join(backup, "data", "dossier-documents")
+        self.assertFalse(os.path.exists(os.path.join(docs, "Mes Projets", "GestionStock")))  # extrait, pas dupliqué
+        self.assertTrue(os.path.exists(os.path.join(backup, "data", "pcsoft-projet-gestionstock", "GestionStock.wdp")))
+        self.assertFalse(os.path.exists(os.path.join(backup, "data", "pcsoft-projet-gestionstock", "Data")))
+        self.assertTrue(os.path.exists(os.path.join(backup, "data", "pcsoft-donnees-data", "CLIENT.fic")))
+        self.assertEqual(self.by_id["pcsoft-projet-gestionstock"]["target"],
+                         {"kind": "known", "name": "Documents", "rel": "Mes Projets/GestionStock"})
+
+    def test_restore_without_rules_goes_back_to_same_relative_place(self):
+        items = [Item.from_dict(d) for d in self.inv["items"] if d["default"]]
+        backup = transfer.run_backup(items, self.inv, self.dest)["backup"]
+        base = os.path.join(self.tmp.name, "new")
+        new = Locations(base, os.path.join(base, "R"), os.path.join(base, "L"), {n: os.path.join(base, n) for n in self.loc.known})
+        transfer.run_restore(backup, new)
+        self.assertTrue(os.path.exists(os.path.join(base, "Documents", "Mes Projets", "GestionStock", "GestionStock.wdp")))
+        self.assertTrue(os.path.exists(os.path.join(base, "Documents", "Mes Projets", "GestionStock", "Data", "CLIENT.fic")))
+
+    def test_restore_with_destination_rules(self):
+        target = os.path.join(self.tmp.name, "C_Mes Projets")
+        data_target = os.path.join(self.tmp.name, "D_Donnees")
+        items = [Item.from_dict(d) for d in self.inv["items"] if d["default"]]
+        # une règle enregistrée avec la sauvegarde...
+        backup = transfer.run_backup(items, self.inv, self.dest,
+                                     redirects=redirects.parse_rules([f"pcsoft-projet = {target}"]))["backup"]
+        base = os.path.join(self.tmp.name, "new")
+        new = Locations(base, os.path.join(base, "R"), os.path.join(base, "L"), {n: os.path.join(base, n) for n in self.loc.known})
+        # ...complétée par une règle donnée à la restauration (elle prime)
+        res = transfer.run_restore(backup, new, rules=redirects.parse_rules([f"pcsoft-donnees = {data_target}"]))
+        self.assertEqual(res["errors"], [])
+        # 2 projets correspondent -> un sous-dossier par projet
+        self.assertTrue(os.path.exists(os.path.join(target, "GestionStock", "GestionStock.wdp")))
+        self.assertTrue(os.path.exists(os.path.join(target, "web", "site.wwp")))
+        # 1 seul élément de données -> directement dans la destination
+        self.assertTrue(os.path.exists(os.path.join(data_target, "CLIENT.fic")))
+        self.assertEqual(res["items"]["pcsoft-projet-gestionstock"]["dest"], os.path.join(target, "GestionStock"))
+        # le reste n'a pas bougé
+        self.assertTrue(os.path.exists(os.path.join(base, "Documents", "rapport.docx")))
+        self.assertFalse(os.path.exists(os.path.join(base, "Documents", "Mes Projets", "GestionStock")))
+
+    def test_cli_map_option_and_rules_file(self):
+        out = os.path.join(self.tmp.name, "sortie")
+        target = os.path.join(self.tmp.name, "MesProjets")
+        with mock.patch("swap.cli.Locations.detect", return_value=self.loc), \
+                mock.patch("swap.cli.run_scan", side_effect=lambda **kw: run_scan(self.loc, **kw)):
+            self.assertEqual(cli.main(["scan", "--out", out]), 0)
+            self.assertTrue(os.path.exists(os.path.join(out, "regles.txt")))
+            with open(os.path.join(out, "regles.txt"), "a", encoding="utf-8") as fh:
+                fh.write(f"pcsoft-projet-gestionstock = {target}\n")
+            self.assertEqual(cli.main(["copy", "--dest", self.dest, "--out", out, "-y"]), 0)
+            backup = os.path.join(self.dest, os.listdir(self.dest)[0])
+            self.assertEqual(cli.main(["restore", "--backup", backup]), 0)
+        self.assertTrue(os.path.exists(os.path.join(target, "GestionStock.wdp")))
+
+
+class RulesTests(unittest.TestCase):
+    def test_parse_rules(self):
+        rules = redirects.parse_rules(["# commentaire", "", "  pcsoft-projet = C:\\Mes Projets ", 'a|b = "D:\\X y"', "sans egal"])
+        self.assertEqual(rules, [("pcsoft-projet", "C:\\Mes Projets"), ("a|b", "D:\\X y")])
+
+    def test_first_rule_wins_and_alternatives(self):
+        it = Item("pcsoft-projet-x", "PC SOFT : projet X", "dir", "/d/x", {})
+        other = Item("config-git", "Git", "file", "/h/.gitconfig", {})
+        reg = Item("registre-putty", "PuTTY", "registry", "HKCU\\x", {})
+        rules = [("nomatch", "/z"), ("git|projet", "/first"), ("pcsoft", "/second")]
+        self.assertEqual(redirects.matching_rule(it, rules), 1)
+        plan = redirects.plan_redirects([it, other, reg], rules)
+        self.assertEqual(plan["pcsoft-projet-x"], os.path.join("/first", "x"))  # la règle vise 2 éléments -> un sous-dossier chacun
+        self.assertIn("config-git", plan)
+        self.assertEqual(plan["config-git"], os.path.join("/first", ".gitconfig"))  # fichier : rangé sous son nom
+        self.assertNotIn("registre-putty", plan)
+
+    def test_template_has_no_active_rule(self):
+        self.assertEqual(redirects.parse_rules(redirects.TEMPLATE.splitlines()), [])
 
 
 class MiscTests(unittest.TestCase):

@@ -14,6 +14,7 @@ from typing import Callable, Optional
 from .fs import Excluder, make_excluder, walk
 from .locations import Locations
 from .model import Item
+from .redirects import plan_redirects
 from .util import human_size, is_windows, long_path
 
 MANIFEST = "manifest.json"
@@ -100,7 +101,7 @@ def copy_item(item: Item, backup: str, *, dry_run=False, want_hash=False, progre
     def on_error(path, exc):
         result["errors"].append(f"{path} : {exc}")
 
-    for e in walk(item.src, make_excluder(item.cache_excludes, item.extra_excludes), on_error):
+    for e in walk(item.src, make_excluder(item.cache_excludes, item.extra_excludes, item.exclude_paths), on_error):
         dest = _dest_path(data_dir, e.rel)
         if e.kind == "d":
             if not dry_run:
@@ -167,7 +168,8 @@ def check_space(items: list, dest: str) -> tuple:
     return need, free
 
 
-def run_backup(items: list, inv: dict, dest: str, *, dry_run=False, want_hash=False, progress: Optional[Callable] = None) -> dict:
+def run_backup(items: list, inv: dict, dest: str, *, dry_run=False, want_hash=False, progress: Optional[Callable] = None,
+               redirects: Optional[list] = None) -> dict:
     backup = backup_dir_for(dest, inv["meta"]["machine"])
     if not dry_run:
         os.makedirs(backup, exist_ok=True)
@@ -186,6 +188,7 @@ def run_backup(items: list, inv: dict, dest: str, *, dry_run=False, want_hash=Fa
             "machine": inv["meta"]["machine"],
             "user": inv["meta"]["user"],
             "hashed": want_hash,
+            "redirects": [list(r) for r in (redirects or [])],
             "items": [it.to_dict() for it in items],
             "stats": {k: {kk: vv for kk, vv in v.items() if kk != "errors"} for k, v in summary["items"].items()},
         }
@@ -260,12 +263,16 @@ def _restore_files(src_root: str, dest_root: str, overwrite: bool, dry_run: bool
 
 
 def run_restore(backup: str, loc: Locations, *, only=(), skip=(), overwrite=False, dry_run=False, interactive=False,
-                input_fn=input, out=print) -> dict:
+                input_fn=input, out=print, rules: Optional[list] = None) -> dict:
     manifest = load_manifest(backup)
     items = select_items([Item.from_dict(d) for d in manifest["items"]], only, skip, interactive, input_fn, out)
+    # règles données maintenant d'abord (elles priment), puis celles enregistrées avec la sauvegarde
+    all_rules = list(rules or []) + [tuple(r) for r in manifest.get("redirects", [])]
+    redirected = plan_redirects(items, all_rules)
     summary = {"items": {}, "errors": []}
     for item in items:
         res = {"restored": 0, "skipped": 0, "errors": []}
+        res["dest"] = redirected.get(item.id) or (loc.resolve(item.target) if item.kind != "registry" else "")
         data = os.path.join(backup, "data", item.id)
         if item.kind == "registry":
             reg = os.path.join(data, "export.reg")
@@ -278,12 +285,12 @@ def run_restore(backup: str, loc: Locations, *, only=(), skip=(), overwrite=Fals
             else:
                 res["restored"] = 1 if os.path.exists(reg) else 0
         elif item.kind == "file":
-            dest = loc.resolve(item.target)
+            dest = res["dest"]
             files = [f for f in os.listdir(data) if not f.endswith(PART)] if os.path.isdir(data) else []
             for name in files:
                 _restore_one(os.path.join(data, name), dest, overwrite, dry_run, res)
         else:
-            _restore_files(data, loc.resolve(item.target), overwrite, dry_run, res)
+            _restore_files(data, res["dest"], overwrite, dry_run, res)
         summary["items"][item.id] = res
         summary["errors"] += res["errors"]
     return summary
