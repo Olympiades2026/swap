@@ -1,0 +1,62 @@
+"""Génère le script PowerShell qui recrée lecteurs réseau, imprimantes, variables et applications."""
+
+from __future__ import annotations
+
+import re
+from datetime import datetime
+
+
+def psq(text: str) -> str:
+    """Chaîne PowerShell entre apostrophes (les apostrophes internes sont doublées)."""
+    return "'" + str(text).replace("'", "''") + "'"
+
+
+def build_setup_script(inv: dict) -> str:
+    s = inv.get("system") or {}
+    lines = [
+        "# Script généré par swap le " + datetime.now().strftime("%Y-%m-%d %H:%M"),
+        f"# Poste d'origine : {inv['meta']['machine']}",
+        "# Relisez-le, mettez en commentaire (#) ce dont vous ne voulez pas, puis lancez-le dans PowerShell sur le NOUVEAU poste.",
+        "$ErrorActionPreference = 'Continue'",
+        "",
+    ]
+    if s.get("drives"):
+        lines.append("# --- Lecteurs réseau ---")
+        for d in s["drives"]:
+            lines.append(f'net use {d["letter"]} "{d["path"]}" /persistent:yes')
+        lines.append("")
+    net_printers = [p for p in s.get("printers", []) if p["network_path"]]
+    if net_printers:
+        lines.append("# --- Imprimantes réseau ---")
+        for p in net_printers:
+            lines.append(f"Add-Printer -ConnectionName {psq(p['network_path'])}")
+        default = next((p for p in net_printers if p["default"]), None)
+        if default:
+            lines.append(f"(New-Object -ComObject WScript.Network).SetDefaultPrinter({psq(default['network_path'])})")
+        lines.append("")
+    local = [p for p in s.get("printers", []) if not p["network_path"]]
+    if local:
+        lines.append("# --- Imprimantes locales / IP : à recréer à la main (pilote + port) ---")
+        lines += [f"#   {p['name']}  (pilote : {p['driver']}, port : {p['port']})" for p in local]
+        lines.append("")
+    env = {k: v for k, v in (s.get("env") or {}).items() if k.upper() != "PATH"}
+    if env:
+        lines.append("# --- Variables d'environnement utilisateur (PATH volontairement exclu) ---")
+        for k, v in env.items():
+            lines.append(f"[Environment]::SetEnvironmentVariable({psq(k)}, {psq(v)}, 'User')")
+        lines.append("")
+    real = [a for a in inv.get("apps", []) if not a.get("component")]
+    auto = [a for a in real if a.get("winget_id")]
+    manual = [a for a in real if not a.get("winget_id")]
+    if auto:
+        lines.append("# --- Applications installables automatiquement (winget) ---")
+        for a in auto:
+            ident = a["winget_id"]
+            if re.fullmatch(r"[\w.\-+]+", ident):
+                lines.append(f"winget install --id {ident} -e --accept-package-agreements --accept-source-agreements  # {a['name']}")
+        lines.append("")
+    if manual:
+        lines.append("# --- À installer à la main (installateur + licence à prévoir) ---")
+        lines += [f"#   {a['name']} {a['version']}  ({a['publisher']})".rstrip() for a in manual]
+        lines.append("")
+    return "\r\n".join(lines) + "\r\n"
