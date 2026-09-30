@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 from typing import Callable, Optional
 
-from . import __version__, apps, system
+from . import __version__, apps, installers, system
 from .advice import compute_advice
 from .catalog import APP_CONFIGS, EXT_HINTS, GENERIC_WORDS, INSTALL_KEEP, NOISE_ROOT_RE
 from .fs import FILE_ATTRIBUTE_REPARSE_POINT, TypeSink, attrs, collect, is_hidden_or_system, make_excluder
@@ -301,6 +301,39 @@ def carve_out_roots(scanner: "_Scanner") -> None:
     # un dossier extrait ne doit plus être « déjà inclus » dans un parent : les éléments carved sont indépendants
 
 
+INSTALLER_CATEGORY = "Installateurs des applications à installer à la main"
+
+
+def collect_installers(scanner: "_Scanner", app_list: list, sysinfo: dict) -> dict:
+    """Rattache aux applis non installables par winget les fichiers d'installation trouvés sur le poste, et en fait des éléments à copier."""
+    manual = [a for a in app_list if not a.get("component") and not a.get("winget_id")]
+    matches = installers.match_installers(manual, scanner.sink.installers)
+    info: dict = {"matched": [], "missing": [], "others": [], "shares": installers.install_shares(sysinfo.get("drives", []))}
+    used: set = set()
+    for app in manual:
+        best = next((c for c in matches.get(app["name"], []) if c["path"] not in used), None)
+        if best is None:
+            info["missing"].append(app["name"])
+            continue
+        used.add(best["path"])
+        base = os.path.basename(best["path"])
+        item = scanner.add(f"installateur-{slugify(app['name'])}", f"Installateur : {app['name']}", "file", best["path"],
+                           {"kind": "known", "name": "Downloads", "rel": f"Installateurs/{base}"}, INSTALLER_CATEGORY,
+                           note="Retrouvé grâce au nom du fichier : vérifiez qu'il s'agit bien de la version voulue.")
+        parents = [i for i in scanner.items if i.kind == "dir" and is_under(best["path"], i.src)]
+        parent = max(parents, key=lambda i: len(i.src), default=None)
+        if parent is not None:  # évite de copier le même fichier deux fois
+            parent.exclude_paths.append(best["path"])
+            parent.size = max(0, parent.size - item.size)
+            parent.files = max(0, parent.files - 1)
+        info["matched"].append({
+            "app": app["name"], "version": app.get("version", ""), "item_id": item.id, "file": base, "path": best["path"],
+            "size": best["size"], "alternatives": [c["path"] for c in matches[app["name"]] if c["path"] != best["path"]],
+        })
+    info["others"] = installers.unmatched_installers(scanner.sink.installers, used)
+    return info
+
+
 def run_scan(loc: Optional[Locations] = None, progress: Optional[Callable[[str], None]] = None, with_system: bool = True) -> dict:
     loc = loc or Locations.detect()
     if progress:
@@ -322,6 +355,7 @@ def run_scan(loc: Optional[Locations] = None, progress: Optional[Callable[[str],
         app["winget_guess"] = "" if app["winget_id"] or app.get("component") else apps.guess_winget(app["name"])
 
     sysinfo = system.collect_all(loc.appdata) if with_system and is_windows() else {}
+    installer_info = collect_installers(scanner, app_list, sysinfo)
 
     sink = scanner.sink
     hints = []
@@ -353,6 +387,7 @@ def run_scan(loc: Optional[Locations] = None, progress: Optional[Callable[[str],
         "big_files": [{"size": s, "path": p} for s, p in sorted(sink.big, reverse=True)],
         "onedrive_roots": scanner.onedrive,
         "system": sysinfo,
+        "installers": installer_info,
     }
     inv["advice"] = compute_advice(inv)
     return inv

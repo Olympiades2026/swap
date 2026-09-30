@@ -133,6 +133,20 @@ def build_report(inv: dict) -> Report:
             r.h("Composants, pilotes et outils gérés par Windows/la DSI (généralement inutile de les migrer)", 3)
             r.p(", ".join(sorted({a["name"] for a in comps}, key=str.lower)))
 
+    inst = inv.get("installers") or {}
+    if inst.get("matched") or inst.get("missing") or inst.get("others"):
+        r.h("Installateurs des applications à réinstaller à la main")
+        r.p("Windows ne conserve pas l'installateur d'un logiciel installé : seuls ceux qui traînent dans vos dossiers "
+            "(Téléchargements, C:\\Temp…) peuvent être récupérés. Ils sont rattachés aux applications par le nom du fichier : vérifiez les versions.")
+        rows = [[m["app"], "✔ " + m["file"], human_size(m["size"]), m["path"], "; ".join(m["alternatives"])] for m in inst.get("matched", [])]
+        rows += [[name, "✘ aucun installateur trouvé", "", "à télécharger chez l'éditeur ou à demander à la DSI", ""] for name in inst.get("missing", [])]
+        r.table(["Application", "Installateur", "Taille", "Trouvé ici", "Autres candidats"], rows)
+        if inst.get("shares"):
+            r.p("Dépôt(s) de logiciels probable(s) : " + ", ".join(f"{d['letter']} = {d['path']}" for d in inst["shares"]))
+        if inst.get("others"):
+            r.h("Autres installateurs trouvés (non rattachés à une application)", 3)
+            r.table(["Taille", "Fichier"], [[human_size(o["size"]), o["path"]] for o in inst["others"]])
+
     if inv["type_hints"]:
         r.h("Types de fichiers rencontrés → logiciels à prévoir")
         rows = []

@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from swap import apps, cli, fs, redirects, transfer
+from swap import apps, cli, fs, installers, redirects, transfer
 from swap.locations import Locations
 from swap.model import Item
 from swap.scan import dedupe_overlaps, run_scan
@@ -283,6 +283,114 @@ class TransferTests(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(backup, "data", "config-ssh")))
             self.assertEqual(cli.main(["verify", "--backup", backup]), 0)
             self.assertEqual(cli.main(["restore", "--backup", backup, "--dry-run"]), 0)
+
+
+class InstallerTests(unittest.TestCase):
+    """Récupération des installateurs des applications qui ne s'installent pas par winget."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.loc = make_profile(self.tmp.name)
+        dl = self.loc.known["Downloads"]
+        big = "x" * (1024 * 1024 + 10)
+        write(os.path.join(dl, "CiscoPacketTracer_900_Win_64bit.exe"), big)
+        write(os.path.join(dl, "mariadb-connector-odbc-3.1.23-win64.msi"), big)
+        write(os.path.join(dl, "PBIDesktopSetup_x64.exe"), big)          # installateur sans appli correspondante
+        write(os.path.join(dl, "Git-2.53.0-64-bit.exe"), big)            # appli gérée par winget : ignorée
+        write(os.path.join(dl, "random-tool.exe"), big)                  # pas de mot d'installation : c'est l'appli elle-même
+        write(os.path.join(dl, "petit-setup.exe"), "x")                  # trop petit pour être un installateur
+        write(os.path.join(dl, "notes.txt"), "autre fichier")
+        fake_apps = [
+            {"name": "Cisco Packet Tracer 9.0.0 64Bit", "version": "9.0.0.700", "publisher": "Cisco Systems, Inc.", "scope": "machine"},
+            {"name": "MariaDB ODBC Driver 64-bit", "version": "3.1.23", "publisher": "MariaDB", "scope": "machine"},
+            {"name": "Assist Central Pro", "version": "4.0", "publisher": "AVerMedia TECHNOLOGIES, Inc.", "scope": "machine"},
+            {"name": "Git", "version": "2.53", "publisher": "The Git Development Community", "scope": "machine"},
+        ]
+        self.patches = [mock.patch("swap.scan.apps.installed_apps", return_value=fake_apps),
+                        mock.patch("swap.scan.apps.winget_map", return_value={"Git": "Git.Git"})]
+        for p in self.patches:
+            p.start()
+        self.inv = run_scan(self.loc)
+        self.by_id = {i["id"]: i for i in self.inv["items"]}
+        self.inst = self.inv["installers"]
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    def test_matching_by_file_name(self):
+        matched = {m["app"]: m["file"] for m in self.inst["matched"]}
+        self.assertEqual(matched["Cisco Packet Tracer 9.0.0 64Bit"], "CiscoPacketTracer_900_Win_64bit.exe")
+        self.assertEqual(matched["MariaDB ODBC Driver 64-bit"], "mariadb-connector-odbc-3.1.23-win64.msi")
+        self.assertNotIn("Git", matched)                       # gérée par winget
+        self.assertEqual(self.inst["missing"], ["Assist Central Pro"])
+
+    def test_unmatched_installers_listed_and_apps_own_exe_ignored(self):
+        others = [os.path.basename(o["path"]) for o in self.inst["others"]]
+        self.assertIn("PBIDesktopSetup_x64.exe", others)
+        self.assertIn("Git-2.53.0-64-bit.exe", others)
+        self.assertNotIn("random-tool.exe", others)
+        self.assertNotIn("petit-setup.exe", others)
+
+    def test_installers_become_items_without_duplicates(self):
+        item = next(i for i in self.inv["items"] if i["id"].startswith("installateur-cisco"))
+        self.assertEqual(item["kind"], "file")
+        self.assertTrue(item["default"])
+        self.assertEqual(item["category"], "Installateurs des applications à installer à la main")
+        self.assertEqual(item["target"], {"kind": "known", "name": "Downloads", "rel": "Installateurs/CiscoPacketTracer_900_Win_64bit.exe"})
+        downloads = self.by_id["dossier-downloads"]
+        self.assertIn(item["src"], downloads["exclude_paths"])
+        self.assertEqual(downloads["files"], 5)  # 7 fichiers - 2 installateurs extraits, moins 0 exclu (petit-setup compte)
+
+    def test_backup_restore_roundtrip_and_script(self):
+        items = [Item.from_dict(d) for d in self.inv["items"] if d["default"]]
+        backup = transfer.run_backup(items, self.inv, os.path.join(self.tmp.name, "usb"))["backup"]
+        cisco = next(i for i in items if i.id.startswith("installateur-cisco"))
+        self.assertTrue(os.path.exists(os.path.join(backup, "data", cisco.id, "CiscoPacketTracer_900_Win_64bit.exe")))
+        self.assertFalse(os.path.exists(os.path.join(backup, "data", "dossier-downloads", "CiscoPacketTracer_900_Win_64bit.exe")))
+        self.assertTrue(os.path.exists(os.path.join(backup, "data", "dossier-downloads", "notes.txt")))
+        base = os.path.join(self.tmp.name, "new")
+        new = Locations(base, os.path.join(base, "R"), os.path.join(base, "L"), {n: os.path.join(base, n) for n in self.loc.known})
+        self.assertEqual(transfer.run_restore(backup, new)["errors"], [])
+        self.assertTrue(os.path.exists(os.path.join(base, "Downloads", "Installateurs", "CiscoPacketTracer_900_Win_64bit.exe")))
+        script = build_setup_script(self.inv)
+        self.assertIn("Start-Process msiexec.exe", script)
+        self.assertIn("mariadb-connector-odbc-3.1.23-win64.msi", script)
+        self.assertIn("Join-Path $PSScriptRoot", script)
+        self.assertIn(f"data\\{cisco.id}\\CiscoPacketTracer_900_Win_64bit.exe", script)
+        # l'appli sans installateur reste dans la liste « à la main »
+        self.assertIn("#   Assist Central Pro", script)
+        self.assertNotIn("#   MariaDB ODBC", script)
+
+    def test_report_and_advice(self):
+        from swap.report import build_report
+
+        md = build_report(self.inv).md()
+        self.assertIn("## Installateurs des applications à réinstaller à la main", md)
+        self.assertIn("✘ aucun installateur trouvé", md)
+        self.assertIn("Autres installateurs trouvés", md)
+        texts = " ".join(a["text"] for a in self.inv["advice"])
+        self.assertIn("Aucun installateur retrouvé pour 1 application(s) (Assist Central Pro)", texts)
+        self.assertIn("2 installateur(s) retrouvé(s)", texts)
+
+    def test_install_share_hint(self):
+        drives = [{"letter": "I:", "path": "\\\\srv\\Install", "user": ""}, {"letter": "W:", "path": "\\\\srv\\Mediatheque", "user": ""}]
+        self.assertEqual([d["letter"] for d in installers.install_shares(drives)], ["I:"])
+        from swap.advice import compute_advice
+
+        inv = dict(self.inv)
+        inv["installers"] = dict(self.inst, shares=installers.install_shares(drives))
+        self.assertIn("dépôt de logiciels", " ".join(a["text"] for a in compute_advice(inv)))
+
+    def test_version_in_name_and_generic_words_do_not_cause_false_matches(self):
+        apps_ = [{"name": "Microsoft Visual Studio Code (User)", "publisher": "Microsoft Corporation"},
+                 {"name": "Outils SQL 25.1.1.0", "publisher": "IPROG"}]
+        cands = [("/d/VSCodeSetup-x64-1.130.exe", 5 << 20), ("/d/microsoft-update-x64.exe", 5 << 20), ("/d/OutilsSQL_setup_25.exe", 5 << 20)]
+        res = installers.match_installers(apps_, cands, stat=lambda p: mock.Mock(st_mtime=1))
+        self.assertIn("Outils SQL 25.1.1.0", res)
+        self.assertEqual(res["Outils SQL 25.1.1.0"][0]["path"], "/d/OutilsSQL_setup_25.exe")
+        self.assertNotIn("/d/microsoft-update-x64.exe", [c["path"] for cs in res.values() for c in cs])
 
 
 class RealWorldTests(unittest.TestCase):

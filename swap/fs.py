@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import heapq
 import os
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Callable, Iterator, Optional
@@ -31,6 +32,12 @@ BIG_FILE = 500 * 1024 * 1024
 # Extensions dont on liste toujours l'emplacement exact (fichiers faciles à oublier).
 NOTABLE_EXTS = {".pst", ".kdbx", ".pfx", ".p12", ".ppk", ".ovpn", ".rdp", ".mdf", ".vhdx", ".vmdk", ".ova", ".wdp", ".wwp", ".wpp", ".fic"}
 NOTABLE_CAP = 300
+
+# Fichiers qui ressemblent à un installateur (pour retrouver ceux des applis à réinstaller à la main).
+INSTALLER_EXTS = {".exe", ".msi", ".msix", ".msixbundle", ".appx", ".zip", ".7z", ".iso"}
+INSTALLER_NAME_RE = re.compile(r"setup|install|instal|x64|x86|win64|win32|(64|32)[-_ ]?bit|amd64|update", re.I)
+MIN_INSTALLER = 1024 * 1024
+INSTALLER_CAP = 20000
 
 
 class Excluder:
@@ -121,7 +128,7 @@ def walk(root: str, excluder: Optional[Excluder] = None, on_error: Optional[Call
                         if not excluder.skip_dir(name) and not excluder.skip_path(child):
                             found.append(Entry("d", child, child_rel, st))
                     elif entry.is_file(follow_symlinks=False):
-                        if not excluder.skip_file(name):
+                        if not excluder.skip_file(name) and not excluder.skip_path(child):
                             found.append(Entry("f", child, child_rel, st, is_placeholder(st)))
                 except OSError as exc:
                     if on_error:
@@ -140,6 +147,7 @@ class TypeSink:
         self.exts: Counter = Counter()
         self.notable: dict = defaultdict(list)
         self.big: list = []
+        self.installers: list = []  # [(chemin, taille)]
         self.keep_big = keep_big
 
     def add(self, path: str, size: int) -> None:
@@ -150,6 +158,10 @@ class TypeSink:
             self.exts[ext] += 1
         if ext in NOTABLE_EXTS and len(self.notable[ext]) < NOTABLE_CAP:
             self.notable[ext].append(path)
+        if ext in INSTALLER_EXTS and size >= MIN_INSTALLER and len(self.installers) < INSTALLER_CAP:
+            # un .exe n'est retenu que si son nom évoque une installation (sinon ce serait l'appli elle-même)
+            if ext != ".exe" or INSTALLER_NAME_RE.search(os.path.basename(path)):
+                self.installers.append((path, size))
         if size >= BIG_FILE:
             item = (size, path)
             if len(self.big) < self.keep_big:

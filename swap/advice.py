@@ -53,6 +53,21 @@ def compute_advice(inv: dict) -> list:
             f"Au moins {human_size(total)} d'images disque et de mises à jour ({', '.join(sorted({os.path.splitext(b['path'])[1] for b in installers}))}) "
             "dans vos dossiers : elles se re-téléchargent. Pour ne pas les copier, ajoutez à la commande copy : --exclude *.iso *.msu *.cab")})
 
+    inst = inv.get("installers") or {}
+    if inst.get("matched"):
+        advice.append({"level": "info", "text": (
+            f"{len(inst['matched'])} installateur(s) retrouvé(s) sur ce poste pour des applications non installables automatiquement : "
+            "ils sont copiés dans la sauvegarde (catégorie « Installateurs ») et lancés par le script de reconfiguration.")})
+    if inst.get("missing"):
+        advice.append({"level": "important", "text": (
+            f"Aucun installateur retrouvé pour {len(inst['missing'])} application(s) ({', '.join(inst['missing'][:6])}"
+            f"{'…' if len(inst['missing']) > 6 else ''}). Windows ne garde pas l'installateur d'un logiciel installé : "
+            "il faudra le retélécharger chez l'éditeur ou le demander à la DSI (voir le tableau « Installateurs »).")})
+    if inst.get("shares"):
+        advice.append({"level": "info", "text": (
+            "Le(s) lecteur(s) réseau " + ", ".join(f"{d['letter']} ({d['path']})" for d in inst["shares"]) +
+            " semble(nt) être un dépôt de logiciels : cherchez-y les installateurs manquants ; le script de reconfiguration le remonte.")})
+
     items = inv.get("items", [])
     drives = [i for i in items if i["category"] == "Autres disques" or i["category"].startswith("Dossiers hors profil")]
     if drives:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime
 
@@ -77,6 +78,28 @@ def build_setup_script(inv: dict) -> str:
         for a in guessed:
             lines.append(f"winget install --id {a['winget_guess']} -e --accept-package-agreements --accept-source-agreements  # {a['name']}")
         lines.append("")
+    matched = (inv.get("installers") or {}).get("matched", [])
+    if matched:
+        lines.append("# --- Installateurs récupérés de l'ancien poste (dossier data de la sauvegarde ; lancés seulement s'ils sont présents) ---")
+        for m in matched:
+            rel = f"data\\{m['item_id']}\\{m['file']}"
+            ext = os.path.splitext(m["file"])[1].lower()
+            lines.append(f"$i = Join-Path $PSScriptRoot {psq(rel)}   # {m['app']}")
+            if ext == ".msi":
+                lines.append("if (Test-Path -LiteralPath $i) { Start-Process msiexec.exe -ArgumentList '/i', \"`\"$i`\"\", '/passive', '/norestart' -Wait }")
+            elif ext in (".msix", ".msixbundle", ".appx"):
+                lines.append("if (Test-Path -LiteralPath $i) { Add-AppxPackage -Path $i }")
+            elif ext == ".exe":
+                lines.append("if (Test-Path -LiteralPath $i) { Start-Process -FilePath $i -Wait }   # assistant d'installation (options silencieuses variables selon l'éditeur)")
+            else:
+                lines.append(f"#   {m['app']} : archive ou image à extraire / monter à la main -> {rel}")
+        lines.append("")
+        shares = (inv.get("installers") or {}).get("shares", [])
+        if shares:
+            lines.append("# Dépôt(s) de logiciels probable(s) sur le réseau : " + ", ".join(f"{d['letter']} = {d['path']}" for d in shares))
+            lines.append("")
+    manual_names = {m["app"] for m in matched}
+    manual = [a for a in manual if a["name"] not in manual_names]
     if manual:
         lines.append("# --- À installer à la main (installateur + licence à prévoir) ---")
         lines += [f"#   {a['name']}{'' if a['version'] in a['name'] else ' ' + a['version']}  ({a['publisher']})".rstrip() for a in manual]

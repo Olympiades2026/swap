@@ -48,6 +48,12 @@ Copie les éléments cochés par défaut (ou choisis avec `-i`, `--only`, `--ski
 Ignorés volontairement : corbeille, caches des navigateurs, `node_modules`, `__pycache__`, `.venv`, fichiers temporaires et verrous Office (`~$*`).
 Les fichiers OneDrive « en ligne uniquement » ne sont **pas** téléchargés. Les dossiers Bureau/Documents redirigés vers OneDrive sont décochés par défaut (ils se resynchronisent sur le nouveau poste), tu peux les recocher.
 
+### Installateurs des applications non installables par le script
+
+Pour chaque application que `winget` ne sait pas réinstaller, l'analyse cherche sur le poste (Téléchargements, `C:\Temp`, dossiers à la racine…) un fichier d'installation dont le **nom** correspond (`.exe`, `.msi`, `.msix`, `.zip`…). Ceux trouvés deviennent des éléments à part (« Installateurs des applications à installer à la main »), copiés dans la sauvegarde puis remis dans `Téléchargements\Installateurs` sur le nouveau poste, et **lancés par `installer_et_configurer.ps1`** (`msiexec` pour les `.msi`, assistant pour les `.exe`). Le rapport donne un tableau application → installateur, indique les applications **sans** installateur, les autres installateurs trouvés, et signale un lecteur réseau qui ressemble à un dépôt de logiciels (`\\serveur\Install`).
+
+Limite : Windows ne conserve pas l'installateur d'un logiciel une fois installé. S'il n'est plus sur le disque, il faut le retélécharger chez l'éditeur ou le demander à la DSI ; l'outil te le dit.
+
 ### Règles de destination (« les trucs PC SOFT arrivent dans `C:\Mes Projets` »)
 
 Par défaut chaque élément retourne à sa place d'origine (adaptée au nouveau profil). Pour l'envoyer ailleurs, écris une règle dans `swap-sortie\regles.txt` (créé par `scan`) :
