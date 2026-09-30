@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from .catalog import COMPONENT_RE
+from .catalog import COMPONENT_RE, WINGET_GUESS
 from .util import is_windows, run
 
 UNINSTALL = r"Software\Microsoft\Windows\CurrentVersion\Uninstall"
@@ -30,7 +30,7 @@ def _read_uninstall(hive, view, scope: str) -> list:
                 vals[name] = winreg.QueryValueEx(sub, name)[0]
             except OSError:
                 pass
-        title = str(vals.get("DisplayName", "")).strip()
+        title = " ".join(str(vals.get("DisplayName", "")).split())
         if not title or vals.get("SystemComponent") == 1 or vals.get("ParentKeyName"):
             continue
         if str(vals.get("ReleaseType", "")).lower() in ("update", "hotfix", "security update") or re.match(r"^KB\d+", title):
@@ -59,7 +59,9 @@ def installed_apps() -> list:
         ident = (app["name"].lower(), app["version"])
         if ident not in seen:
             seen.add(ident)
-            app["component"] = bool(COMPONENT_RE.search(app["name"]))
+            # Les « applications web » Chrome/Edge (PWA) se recréent avec la synchronisation du navigateur.
+            web_app = app["publisher"].replace("\\", "/").lower() in ("google/chrome", "microsoft/edge")
+            app["component"] = web_app or bool(COMPONENT_RE.search(app["name"]))
             unique.append(app)
     return sorted(unique, key=lambda a: a["name"].lower())
 
@@ -78,10 +80,18 @@ def parse_winget_table(text: str) -> dict:
     for ln in lines[sep + 1:]:
         if len(ln) <= starts[1]:
             continue
-        name, ident = ln[: starts[1]].strip(), ln[starts[1]:end].strip()
+        name, ident = " ".join(ln[: starts[1]].split()), ln[starts[1]:end].strip()
         if name and ident and " " not in ident:
             result[name] = ident
     return result
+
+
+def guess_winget(name: str) -> str:
+    """Suggestion d'identifiant winget pour une appli courante non reconnue automatiquement ('' si inconnue)."""
+    for pattern, ident in WINGET_GUESS:
+        if re.search(pattern, name, re.I):
+            return ident
+    return ""
 
 
 def winget_map() -> dict:

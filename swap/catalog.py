@@ -66,13 +66,30 @@ APP_CONFIGS = [
               note="Les pilotes ODBC correspondants doivent être installés sur le nouveau poste."),
 ]
 
-# Applications qui n'ont pas besoin d'être migrées à la main (composants, pilotes, mises à jour).
+# Applications qui n'ont pas besoin d'être migrées à la main : composants, pilotes, mises à jour,
+# éléments déjà fournis par Windows/Microsoft 365, agents déployés par la DSI.
 COMPONENT_RE = re.compile(
-    r"redistributable|visual c\+\+|\.net (runtime|framework|core|desktop|sdk)|windows sdk|software development kit|"
-    r"webview2|update for|hotfix|security update|\bdriver\b|pilote|vcredist|intel\(r\)|realtek|nvidia (graphics|hd audio|physx)|"
-    r"language pack|microsoft update health|windows (app certification|driver package)",
+    r"redistributable|visual c\+\+|\.net (runtime|framework|core|desktop|sdk)|desktop runtime|runtime package|windowsappruntime|"
+    r"windows sdk|software development kit|webview2|update for|hotfix|security update|"
+    r"(?<!odbc )(?<!jdbc )\bdriver\b|pilote|vcredist|intel\(r\)|realtek|nvidia (graphics|hd audio|physx)|"
+    r"language pack|microsoft update health|windows (app certification|driver package)|"
+    r"assistant d.installation de windows|contr.le d.int.grit. du pc|application compatibility|"
+    r"intune|management extension|maintenance service|glpi agent|ad lds|"
+    r"microsoft (outlook|word|excel|powerpoint|onenote|access|publisher) (20\d\d|365) - |teams meeting add-in",
     re.I,
 )
+
+# Applications courantes que winget ne « reconnaît » pas toujours sur un poste (installées par MSI/EXE) mais qu'il sait installer.
+# (regex sur le nom, identifiant winget). À relire : ce sont des suggestions, pas une correspondance certaine.
+WINGET_GUESS = [
+    (r"^google chrome$", "Google.Chrome"),
+    (r"^mozilla firefox", "Mozilla.Firefox"),
+    (r"^winscp", "WinSCP.WinSCP"),
+    (r"^putty", "PuTTY.PuTTY"),
+    (r"^vlc media player", "VideoLAN.VLC"),
+    (r"^zoom", "Zoom.Zoom"),
+    (r"^filezilla", "TimKosse.FileZilla.Client"),
+]
 
 # Conseils déclenchés par la présence d'un logiciel : (regex sur le nom, niveau, conseil)
 APP_ADVICE = [
@@ -108,6 +125,17 @@ APP_ADVICE = [
      "Messagerie/visio : reconnexion avec le compte ; les discussions sont côté serveur, pas besoin de les copier."),
     (r"python|node\.?js|java|jdk|golang|rust|\bgit\b|visual studio|jetbrains|intellij|pycharm|android studio", "info",
      "Outils de développement : réinstaller les versions utilisées (voir liste) ; les dossiers de projets sont copiés, mais pas node_modules/.venv (à régénérer)."),
+    (r"wireguard", "important",
+     "WireGuard : les tunnels sont stockés chiffrés par Windows et ne se copient pas. Dans l'application : « Exporter tous les tunnels vers un zip », "
+     "puis les importer sur le nouveau poste."),
+    (r"packet tracer|networking academy", "info",
+     "Cisco Packet Tracer : se reconnecter avec le compte Networking Academy ; vos fichiers .pkt sont dans vos dossiers (copiés)."),
+    (r"power ?bi", "important",
+     "Power BI Desktop : les .pbix sont copiés, mais les identifiants des sources de données sont à ressaisir (Fichier > Options > Paramètres de source de données)."),
+    (r"laragon|xampp|wamp|mamp", "important",
+     "Serveur web local (Laragon/XAMPP/WAMP) : copier le dossier des sites (ex. C:\\laragon\\www) mais faire un dump SQL des bases plutôt que copier leurs fichiers."),
+    (r"obsidian", "info",
+     "Obsidian : un « coffre » est un simple dossier (contenant .obsidian) ; il est copié avec vos dossiers, sauf s'il est hors profil (voir « Autres disques »)."),
     (r"mcafee|norton|kaspersky|crowdstrike|sentinelone|symantec|sophos|defender for endpoint", "info",
      "Antivirus/EDR : géré par la DSI, ne pas le migrer à la main."),
 ]

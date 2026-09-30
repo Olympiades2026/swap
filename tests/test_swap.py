@@ -301,6 +301,46 @@ class MiscTests(unittest.TestCase):
         self.assertEqual(len(m), 3)
         self.assertEqual(apps.parse_winget_table("rien d'utile"), {})
 
+    def test_parse_winget_real_world_quirks(self):
+        # Vrai format observé : version « > 1.8.10 » (avec espace), colonne « Disponible » vide, doublons, espaces insécables.
+        rows = [("Git", "Git.Git", "2.53.0.3", "2.55.0.5"),
+                ("Microsoft\xa0Office fr-fr", "Microsoft.Office", "16.0.20430.2009", ""),
+                ("WindowsAppRuntime.1.8", "Microsoft.WindowsAppRuntime.1.8", "> 1.8.10", ""),
+                ("WindowsAppRuntime.1.8", "Microsoft.WindowsAppRuntime.1.8", "1.8.9", "")]
+        fmt = "{:<40}{:<33}{:<18}{}\r\n"
+        text = fmt.format("Nom", "ID", "Version", "Disponible") + "-" * 110 + "\r\n"
+        text += "".join(fmt.format(*r).rstrip(" ") + "\r\n" if not r[3] else fmt.format(*r) for r in rows).replace("\r\n\r\n", "\r\n")
+        m = apps.parse_winget_table(text)
+        self.assertEqual(m["Git"], "Git.Git")
+        self.assertEqual(m["Microsoft Office fr-fr"], "Microsoft.Office")  # espace insécable normalisé
+        self.assertEqual(len(m), 3)
+
+    def test_component_classification(self):
+        from swap.catalog import COMPONENT_RE
+
+        for name in ["Microsoft Visual C++ v14 Redistributable (x64) - 14.50", "Microsoft Windows Desktop Runtime 10.0.12 (x64)",
+                     "Microsoft Intune Management Extension", "GLPI Agent 1.13", "Mozilla Maintenance Service",
+                     "Microsoft Outlook 2016 - fr-fr", "Microsoft Teams Meeting Add-in for Microsoft Office",
+                     "Instance AD LDS Annuaire", "Intel(R) Wireless Bluetooth Driver"]:
+            self.assertTrue(COMPONENT_RE.search(name), name)
+        for name in ["MariaDB ODBC Driver 64-bit", "Git", "Microsoft 365 Apps for enterprise - fr-fr", "WinSCP 6.5.5",
+                     "Microsoft PowerBI Desktop (x64)", "KeePassXC", "Oracle ODAC 19 version 19.3.1"]:
+            self.assertFalse(COMPONENT_RE.search(name), name)
+
+    def test_winget_guess(self):
+        self.assertEqual(apps.guess_winget("Google Chrome"), "Google.Chrome")
+        self.assertEqual(apps.guess_winget("WinSCP 6.5.5"), "WinSCP.WinSCP")
+        self.assertEqual(apps.guess_winget("Logiciel maison"), "")
+
+    def test_setup_script_guesses_and_no_duplicate_version(self):
+        inv = {"meta": {"machine": "PC1"}, "system": {}, "apps": [
+            {"name": "Google Chrome", "version": "1", "publisher": "Google", "winget_id": "", "winget_guess": "Google.Chrome"},
+            {"name": "Connector 8.0.19", "version": "8.0.19", "publisher": "Oracle", "winget_id": "", "winget_guess": ""}]}
+        s = build_setup_script(inv)
+        self.assertIn("winget install --id Google.Chrome", s)
+        self.assertIn("Suggestions winget", s)
+        self.assertIn("#   Connector 8.0.19  (Oracle)", s)
+
     def test_setup_script(self):
         inv = {
             "meta": {"machine": "PC1"},

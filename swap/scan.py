@@ -186,6 +186,7 @@ def run_scan(loc: Optional[Locations] = None, progress: Optional[Callable[[str],
     winget = apps.winget_map() if app_list else {}
     for app in app_list:
         app["winget_id"] = winget.get(app["name"], "")
+        app["winget_guess"] = "" if app["winget_id"] or app.get("component") else apps.guess_winget(app["name"])
 
     sysinfo = system.collect_all(loc.appdata) if with_system and is_windows() else {}
 

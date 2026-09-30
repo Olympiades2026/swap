@@ -48,6 +48,8 @@ def build_setup_script(inv: dict) -> str:
     real = [a for a in inv.get("apps", []) if not a.get("component")]
     auto = [a for a in real if a.get("winget_id")]
     manual = [a for a in real if not a.get("winget_id")]
+    guessed = [a for a in manual if a.get("winget_guess")]
+    manual = [a for a in manual if not a.get("winget_guess")]
     if auto:
         lines.append("# --- Applications installables automatiquement (winget) ---")
         for a in auto:
@@ -55,8 +57,13 @@ def build_setup_script(inv: dict) -> str:
             if re.fullmatch(r"[\w.\-+]+", ident):
                 lines.append(f"winget install --id {ident} -e --accept-package-agreements --accept-source-agreements  # {a['name']}")
         lines.append("")
+    if guessed:
+        lines.append("# --- Suggestions winget (correspondance par nom, à relire avant de lancer) ---")
+        for a in guessed:
+            lines.append(f"winget install --id {a['winget_guess']} -e --accept-package-agreements --accept-source-agreements  # {a['name']}")
+        lines.append("")
     if manual:
         lines.append("# --- À installer à la main (installateur + licence à prévoir) ---")
-        lines += [f"#   {a['name']} {a['version']}  ({a['publisher']})".rstrip() for a in manual]
+        lines += [f"#   {a['name']}{'' if a['version'] in a['name'] else ' ' + a['version']}  ({a['publisher']})".rstrip() for a in manual]
         lines.append("")
     return "\r\n".join(lines) + "\r\n"

@@ -111,18 +111,21 @@ def build_report(inv: dict) -> Report:
         real = [a for a in apps if not a.get("component")]
         auto = [a for a in real if a.get("winget_id")]
         manual = [a for a in real if not a.get("winget_id")]
+        guessed = sum(1 for a in manual if a.get("winget_guess"))
         r.h("Applications à réinstaller")
         r.p(f"{len(auto)} réinstallable(s) automatiquement avec winget (script fourni), {len(manual)} à réinstaller à la main "
-            "(prévoir installateurs et licences).")
+            "(prévoir installateurs et licences)."
+            + (f" Pour {guessed} d'entre elles, winget propose une installation (suggestion à vérifier)." if guessed else ""))
         if manual:
             r.h("À réinstaller à la main", 3)
-            r.table(["Application", "Version", "Éditeur"], [[a["name"], a["version"], a["publisher"]] for a in manual])
+            r.table(["Application", "Version", "Éditeur", "Suggestion winget (à vérifier)"],
+                    [[a["name"], a["version"], a["publisher"], a.get("winget_guess", "")] for a in manual])
         if auto:
             r.h("Installables avec winget", 3)
             r.table(["Application", "Version", "Identifiant winget"], [[a["name"], a["version"], a["winget_id"]] for a in auto])
         comps = [a for a in apps if a.get("component")]
         if comps:
-            r.h("Composants et pilotes (généralement inutile de les migrer)", 3)
+            r.h("Composants, pilotes et outils gérés par Windows/la DSI (généralement inutile de les migrer)", 3)
             r.p(", ".join(sorted({a["name"] for a in comps}, key=str.lower)))
 
     if inv["type_hints"]:
