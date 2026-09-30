@@ -285,6 +285,134 @@ class TransferTests(unittest.TestCase):
             self.assertEqual(cli.main(["restore", "--backup", backup, "--dry-run"]), 0)
 
 
+class RealWorldTests(unittest.TestCase):
+    """Cas relevés sur un vrai poste : installation WinDev, logiciels dans C:\\, certificat Intune, ISO..."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.loc = make_profile(self.tmp.name)
+        self.root = os.path.join(self.tmp.name, "C")
+        pc = os.path.join(self.root, "PC SOFT", "WINDEV Suite SaaS 2025")
+        write(os.path.join(pc, "Examples", "WD", "Complete examples", "Demo", "Demo.wdp"))
+        write(os.path.join(pc, "Examples", "WD", "Complete examples", "Demo", "Demo.fic"))
+        write(os.path.join(pc, "Programs", "Data", "aide.fic"))
+        write(os.path.join(pc, "Personal", "Guide", "guide.FIC"), "vos données")
+        write(os.path.join(pc, "Personal", "My WINDEV", "pref.txt"), "vos préférences")
+        write(os.path.join(self.root, "Applications_CLMB", "Annuaire", "salaries.fic"), "données entreprise")
+        write(os.path.join(self.root, "Applications_CLMB", "Annuaire", "salaries.ndx"), "index")
+        write(os.path.join(self.root, "laragon", "bin", "php.exe"), "logiciel")
+        write(os.path.join(self.root, "laragon", "www", "monsite", "index.php"), "<?php")
+        write(os.path.join(self.root, "Temp", "windows.iso"), "iso")
+        write(os.path.join(self.root, "Intune Content Prep tool", "x.exe"))
+        write(os.path.join(self.root, "AVerMedia", "cam.dll"))
+        write(os.path.join(self.root, "CLMB", "donnees.txt"), "mes données")
+        os.makedirs(os.path.join(self.root, "Vide"))
+        os.makedirs(os.path.join(self.loc.home, "DossierVide"))
+        os.symlink(os.path.join(self.loc.home, "Projets"), os.path.join(self.loc.home, "Voisinage réseau"))
+        fake_apps = [
+            {"name": "Laragon 8.6.1", "version": "8.6.1", "publisher": "leokhoa", "scope": "machine"},
+            {"name": "Assist Central Pro", "version": "4", "publisher": "AVerMedia TECHNOLOGIES, Inc.", "scope": "machine"},
+            {"name": "AutomaticUpdate", "version": "30", "publisher": "PC SOFT", "scope": "machine"},
+        ]
+        self.patches = [mock.patch("swap.scan.fixed_drives", return_value=[self.root]),
+                        mock.patch("swap.scan.apps.installed_apps", return_value=fake_apps)]
+        for p in self.patches:
+            p.start()
+        self.inv = run_scan(self.loc)
+        self.by_id = {i["id"]: i for i in self.inv["items"]}
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    def test_windev_installation_is_not_copied_but_personal_is(self):
+        pcsoft = self.by_id["disque-x-pc-soft"]
+        self.assertFalse(pcsoft["default"])
+        self.assertIn("Installation de WinDev", pcsoft["note"])
+        personal = self.by_id["garder-pc-soft-personal"]
+        self.assertTrue(personal["default"])
+        self.assertEqual(personal["files"], 2)
+        self.assertIn(personal["src"], pcsoft["exclude_paths"])
+        # les exemples et données de l'installation ne sont ni des projets ni des « fichiers remarquables »
+        self.assertFalse([i for i in self.inv["items"] if i["id"].startswith("pcsoft-projet")])
+        exts = {h["ext"] for h in self.inv["type_hints"]}
+        self.assertNotIn(".wdp", exts)
+        self.assertEqual(self.inv["notable_files"][".fic"], [os.path.join(self.root, "Applications_CLMB", "Annuaire", "salaries.fic")])
+
+    def test_your_own_pcsoft_data_is_carved_out(self):
+        self.assertIn("pcsoft-donnees-annuaire", self.by_id)
+        self.assertTrue(self.by_id["pcsoft-donnees-annuaire"]["default"])
+        self.assertTrue(self.by_id["disque-x-applications-clmb"]["default"])
+
+    def test_installed_software_and_noise_folders_unchecked(self):
+        for item_id in ("disque-x-laragon", "disque-x-temp", "disque-x-intune-content-prep-tool", "disque-x-avermedia"):
+            self.assertFalse(self.by_id[item_id]["default"], item_id)
+        self.assertIn("Assist Central Pro", self.by_id["disque-x-avermedia"]["note"])
+        self.assertTrue(self.by_id["disque-x-clmb"]["default"])
+
+    def test_laragon_keeps_www_only(self):
+        www = self.by_id["garder-laragon-www"]
+        self.assertTrue(www["default"])
+        self.assertEqual(www["files"], 1)
+        self.assertIn(www["src"], self.by_id["disque-x-laragon"]["exclude_paths"])
+
+    def test_empty_folders_and_junctions_are_ignored(self):
+        self.assertNotIn("disque-x-vide", self.by_id)
+        self.assertNotIn("profil-dossiervide", self.by_id)
+        self.assertFalse([i for i in self.inv["items"] if "Voisinage" in i["label"]])
+
+    def test_backup_of_this_layout_has_no_duplicate_and_honours_defaults(self):
+        items = [Item.from_dict(d) for d in self.inv["items"] if d["default"]]
+        backup = transfer.run_backup(items, self.inv, os.path.join(self.tmp.name, "usb"))["backup"]
+        data = os.path.join(backup, "data")
+        self.assertTrue(os.path.exists(os.path.join(data, "garder-pc-soft-personal", "My WINDEV", "pref.txt")))
+        self.assertTrue(os.path.exists(os.path.join(data, "garder-laragon-www", "monsite", "index.php")))
+        self.assertFalse(os.path.exists(os.path.join(data, "disque-x-pc-soft")))
+        self.assertFalse(os.path.exists(os.path.join(data, "disque-x-temp")))
+
+    def test_exclude_patterns(self):
+        items = [Item.from_dict(d) for d in self.inv["items"]]
+        only = [i for i in items if i.id == "disque-x-temp"]
+        kept = transfer.run_backup(only, self.inv, os.path.join(self.tmp.name, "u1"))["backup"]
+        self.assertTrue(os.path.exists(os.path.join(kept, "data", "disque-x-temp", "windows.iso")))
+        skipped = transfer.run_backup(only, self.inv, os.path.join(self.tmp.name, "u2"), exclude_files=["*.iso"])["backup"]
+        self.assertFalse(os.path.exists(os.path.join(skipped, "data", "disque-x-temp", "windows.iso")))
+
+    def test_intune_certificate_is_not_critical(self):
+        from swap.advice import compute_advice
+
+        inv = dict(self.inv)
+        inv["system"] = {"certificates": [
+            {"subject": "CN=09fe5669-8cc4-45af-9d14-ffe6f5df8074", "issuer": "CN=Microsoft Intune MDM Device CA", "private_key": True},
+        ]}
+        adv = compute_advice(inv)
+        self.assertFalse([a for a in adv if a["level"] == "critique" and "certificat" in a["text"]])
+        self.assertTrue([a for a in adv if "Intune" in a["text"] and a["level"] == "info"])
+        inv["system"]["certificates"].append({"subject": "CN=Jean Dupont, O=Société", "issuer": "CN=CA Interne", "private_key": True})
+        crit = [a for a in compute_advice(inv) if a["level"] == "critique" and "certificat" in a["text"]]
+        self.assertEqual(len(crit), 1)
+        self.assertIn("1 certificat", crit[0]["text"])
+
+    def test_report_hides_vendor_tasks_and_default_dsn(self):
+        from swap.report import build_report
+
+        inv = dict(self.inv)
+        inv["system"] = {
+            "tasks": [
+                {"name": "Sauvegarde nocturne", "path": "\\", "state": "3", "action": "D:\\scripts\\backup.bat"},
+                {"name": "OneDrive Startup", "path": "\\", "state": "3", "action": "C:\\Program Files\\Microsoft OneDrive\\OneDriveLauncher.exe"},
+            ],
+            "odbc": [{"name": "Excel Files", "driver": "x", "scope": "utilisateur"}, {"name": "COMPTA", "driver": "MariaDB", "scope": "utilisateur"}],
+        }
+        md = build_report(inv).md()
+        self.assertIn("Sauvegarde nocturne", md)
+        self.assertNotIn("OneDrive Startup", md)
+        self.assertIn("1 tâche(s) créée(s) par des logiciels installés", md)
+        self.assertIn("COMPTA", md)
+        self.assertNotIn("| Excel Files |", md)
+
+
 class PcSoftTests(unittest.TestCase):
     """Projets WinDev/WebDev et données HFSQL : repérés où qu'ils soient, extraits, redirigeables."""
 
@@ -460,8 +588,9 @@ class MiscTests(unittest.TestCase):
             "system": {
                 "drives": [{"letter": "Z:", "path": r"\\srv\compta", "user": ""}],
                 "printers": [{"name": "HP", "driver": "d", "port": "IP_1", "network_path": r"\\srv\imp1", "default": True},
-                             {"name": "Zebra", "driver": "z", "port": "USB001", "network_path": "", "default": False}],
-                "env": {"PROJ": "l'été", "PATH": "x"},
+                             {"name": "Zebra", "driver": "z", "port": "USB001", "network_path": "", "default": False},
+                             {"name": "Ricoh IP", "driver": "RICOH PCL6", "port": "IP_10.1.2.3", "network_path": "", "default": False}],
+                "env": {"PROJ": "l'été", "Path": r"%USERPROFILE%\AppData\Local\Microsoft\WindowsApps;C:\Applications_CLMB\Framework;", "OneDrive": r"C:\Users\x\OneDrive"},
             },
             "apps": [{"name": "Git", "version": "2", "publisher": "", "winget_id": "Git.Git"},
                      {"name": "Sage 100", "version": "9", "publisher": "Sage", "winget_id": ""},
@@ -471,7 +600,10 @@ class MiscTests(unittest.TestCase):
         self.assertIn('net use Z: "\\\\srv\\compta" /persistent:yes', s)
         self.assertIn("Add-Printer -ConnectionName '\\\\srv\\imp1'", s)
         self.assertIn("SetEnvironmentVariable('PROJ', 'l''été', 'User')", s)
-        self.assertNotIn("'PATH'", s)
+        self.assertIn("'C:\\Applications_CLMB\\Framework'", s)   # entrée PATH personnalisée conservée
+        self.assertNotIn("WindowsApps", s)                       # entrée standard ignorée
+        self.assertNotIn("SetEnvironmentVariable('OneDrive'", s)  # variable propre au profil : jamais recopiée
+        self.assertIn("Add-PrinterPort -Name 'IP_10.1.2.3' -PrinterHostAddress '10.1.2.3'", s)
         self.assertIn("winget install --id Git.Git", s)
         self.assertIn("#   Sage 100", s)
         self.assertNotIn("VC++", s)

@@ -93,7 +93,8 @@ def _dest_path(base: str, rel: str) -> str:
     return os.path.join(base, *rel.split("/"))
 
 
-def copy_item(item: Item, backup: str, *, dry_run=False, want_hash=False, progress: Optional[Callable] = None) -> dict:
+def copy_item(item: Item, backup: str, *, dry_run=False, want_hash=False, progress: Optional[Callable] = None,
+              exclude_files=()) -> dict:
     data_dir = os.path.join(backup, "data", item.id)
     result = {"copied": 0, "unchanged": 0, "cloud_skipped": 0, "bytes": 0, "errors": []}
     records = []
@@ -101,7 +102,7 @@ def copy_item(item: Item, backup: str, *, dry_run=False, want_hash=False, progre
     def on_error(path, exc):
         result["errors"].append(f"{path} : {exc}")
 
-    for e in walk(item.src, make_excluder(item.cache_excludes, item.extra_excludes, item.exclude_paths), on_error):
+    for e in walk(item.src, make_excluder(item.cache_excludes, item.extra_excludes, item.exclude_paths, exclude_files), on_error):
         dest = _dest_path(data_dir, e.rel)
         if e.kind == "d":
             if not dry_run:
@@ -169,7 +170,7 @@ def check_space(items: list, dest: str) -> tuple:
 
 
 def run_backup(items: list, inv: dict, dest: str, *, dry_run=False, want_hash=False, progress: Optional[Callable] = None,
-               redirects: Optional[list] = None) -> dict:
+               redirects: Optional[list] = None, exclude_files=()) -> dict:
     backup = backup_dir_for(dest, inv["meta"]["machine"])
     if not dry_run:
         os.makedirs(backup, exist_ok=True)
@@ -178,7 +179,7 @@ def run_backup(items: list, inv: dict, dest: str, *, dry_run=False, want_hash=Fa
         if item.kind == "registry":
             res = export_registry(item, backup, dry_run)
         else:
-            res = copy_item(item, backup, dry_run=dry_run, want_hash=want_hash, progress=progress)
+            res = copy_item(item, backup, dry_run=dry_run, want_hash=want_hash, progress=progress, exclude_files=exclude_files)
         summary["items"][item.id] = res
         summary["errors"] += res["errors"]
     if not dry_run:
@@ -189,6 +190,7 @@ def run_backup(items: list, inv: dict, dest: str, *, dry_run=False, want_hash=Fa
             "user": inv["meta"]["user"],
             "hashed": want_hash,
             "redirects": [list(r) for r in (redirects or [])],
+            "exclude_files": list(exclude_files),
             "items": [it.to_dict() for it in items],
             "stats": {k: {kk: vv for kk, vv in v.items() if kk != "errors"} for k, v in summary["items"].items()},
         }

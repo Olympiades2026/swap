@@ -132,7 +132,7 @@ def cmd_copy(args) -> int:
         for pattern, dest in rules:
             print(f"  {pattern}  →  {dest}")
     summary = transfer.run_backup(chosen, inv, args.dest, dry_run=args.dry_run, want_hash=args.hash, progress=_progress,
-                                  redirects=rules)
+                                  redirects=rules, exclude_files=args.exclude or ())
     _end_progress()
     for item in chosen:
         r = summary["items"][item.id]
@@ -195,7 +195,7 @@ def menu() -> int:
     print(" 4) Restaurer sur le NOUVEAU poste")
     print(" q) Quitter")
     choice = input("\nVotre choix : ").strip().lower()
-    ns = argparse.Namespace(map=None, map_file=None, out=DEFAULT_OUT, inventory=None, no_system=False, only=None, skip=None, interactive=True, yes=False,
+    ns = argparse.Namespace(exclude=None, map=None, map_file=None, out=DEFAULT_OUT, inventory=None, no_system=False, only=None, skip=None, interactive=True, yes=False,
                             dry_run=False, hash=False, deep=False, overwrite=False)
     if choice == "1":
         return cmd_scan(ns)
@@ -231,6 +231,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--map", action="append", metavar="MOTIF=DESTINATION",
                    help="règle de destination, ex. --map \"pcsoft-projet=C:\\Mes Projets\" (répétable ; voir regles.txt)")
     c.add_argument("--map-file", help="fichier de règles (défaut : regles.txt du dossier de sortie)")
+    c.add_argument("--exclude", nargs="+", metavar="MOTIF", help="ne pas copier ces fichiers, ex. --exclude *.iso *.msu")
     c.add_argument("--hash", action="store_true", help="calculer une empreinte SHA-256 de chaque fichier (plus lent)")
     c.add_argument("--dry-run", action="store_true", help="simuler sans rien écrire")
     c.add_argument("-y", "--yes", action="store_true", help="ne pas poser de question")

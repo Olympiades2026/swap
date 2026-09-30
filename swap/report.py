@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import html
+import re
 from collections import OrderedDict
 
 from .util import human_size
 
+NOTABLE_SHOWN = 25
+TASK_STATE = {"0": "inconnu", "1": "désactivée", "2": "en attente", "3": "prête", "4": "en cours"}
+DEFAULT_DSN = {"MS Access Database", "Excel Files", "dBASE Files"}
+VENDOR_TASK_RE = re.compile(r"program files|\\windows\\|driverstore|programdata", re.I)
 LEVEL_LABEL = {"critique": "🔴 Critique", "important": "🟠 Important", "info": "🔵 À savoir"}
 
 
@@ -140,7 +145,7 @@ def build_report(inv: dict) -> Report:
         r.h("Fichiers remarquables (faciles à oublier)")
         for ext, paths in sorted(inv["notable_files"].items()):
             r.h(ext, 3)
-            r.bullets(paths)
+            r.bullets(paths[:NOTABLE_SHOWN] + ([f"… et {len(paths) - NOTABLE_SHOWN} autres (voir inventaire.json)"] if len(paths) > NOTABLE_SHOWN else []))
 
     if inv["big_files"]:
         r.h("Très gros fichiers")
@@ -165,11 +170,18 @@ def build_report(inv: dict) -> Report:
             r.table(["Nom", "Commande", "Portée"], [[x["name"], x["command"], x["scope"]] for x in st.get("registry", [])]
                     + [[f, "(dossier Démarrage)", "utilisateur"] for f in st.get("folder", [])])
         if s.get("tasks"):
+            mine = [t for t in s["tasks"] if not VENDOR_TASK_RE.search(t["action"] or "")]
             r.h("Tâches planifiées (hors Microsoft)", 3)
-            r.table(["Nom", "Action", "État"], [[t["name"], t["action"], t["state"]] for t in s["tasks"]])
+            if len(s["tasks"]) > len(mine):
+                r.p(f"{len(s['tasks']) - len(mine)} tâche(s) créée(s) par des logiciels installés (OneDrive, Chrome, pilotes…) ne sont pas listées : "
+                    "elles se recréent à l'installation.")
+            r.table(["Nom", "Action", "État"], [[t["name"], t["action"], TASK_STATE.get(t["state"], t["state"])] for t in mine])
         if s.get("odbc"):
+            custom = [o for o in s["odbc"] if o["name"] not in DEFAULT_DSN]
             r.h("Sources de données ODBC", 3)
-            r.table(["Nom", "Pilote", "Portée"], [[o["name"], o["driver"], o["scope"]] for o in s["odbc"]])
+            if len(custom) < len(s["odbc"]):
+                r.p("Les sources par défaut d'Office (MS Access Database, Excel Files, dBASE Files) ne sont pas listées.")
+            r.table(["Nom", "Pilote", "Portée"], [[o["name"], o["driver"], o["scope"]] for o in custom])
         if s.get("env"):
             r.h("Variables d'environnement utilisateur", 3)
             r.table(["Variable", "Valeur"], [[k, v] for k, v in s["env"].items()])

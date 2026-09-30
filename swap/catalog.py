@@ -102,6 +102,16 @@ WINGET_GUESS = [
     (r"^filezilla", "TimKosse.FileZilla.Client"),
 ]
 
+# Dossiers à la racine d'un disque qui sont surtout des installations/du temporaire (décochés par défaut).
+NOISE_ROOT_RE = re.compile(r"^(temp|tmp)$|lenovo|dell|deployfonts|intune|swsetup|drivers|sccm|installateurs?$", re.I)
+
+# Logiciel installé dans un dossier racine -> sous-dossiers qui contiennent VOS données (proposés à part).
+INSTALL_KEEP = {"laragon": ["www"], "xampp": ["htdocs"], "wamp": ["www"], "wamp64": ["www"]}
+
+# Mots trop génériques pour rapprocher un dossier d'un logiciel installé.
+GENERIC_WORDS = {"microsoft", "corporation", "technologies", "software", "systems", "system", "windows", "team", "enterprise",
+                 "desktop", "server", "support", "update", "runtime", "redistributable", "google", "apps", "tool", "tools"}
+
 # Conseils déclenchés par la présence d'un logiciel : (regex sur le nom, niveau, conseil)
 APP_ADVICE = [
     (r"outlook|microsoft (365|office)|office (16|15|professional|standard|home)", "important",
@@ -114,7 +124,7 @@ APP_ADVICE = [
      "Gestionnaire de mots de passe : vérifiez que la base (ou la synchronisation cloud) est accessible depuis le nouveau poste AVANT d'éteindre l'ancien."),
     (r"sage|ciel|ebp|quickbooks|cegid|divalto", "critique",
      "Logiciel de gestion/compta : ne copiez pas simplement son dossier. Utilisez sa sauvegarde/restauration intégrée et reprenez la licence/le contrat."),
-    (r"sql server|mysql|postgres|mariadb|mongodb|oracle database|sqlite|firebird", "critique",
+    (r"(?<!my)sql server|mysql|postgres|mariadb|mongodb|oracle database|sqlite|firebird", "critique",
      "Serveur de base de données local : faire un dump/une sauvegarde native (pas une copie de fichiers), puis restaurer sur le nouveau poste."),
     (r"autocad|revit|inventor|solidworks|catia|archicad|sketchup|fusion", "important",
      "Logiciel de CAO : licence (réseau ou compte), bibliothèques, gabarits (.dwt) et profils utilisateur à rapatrier."),
@@ -191,7 +201,7 @@ EXT_HINTS = {
     ".drawio": ("draw.io", r"draw\.?io|diagrams", "À installer ou utiliser en ligne."),
     ".sln": ("Visual Studio", r"visual studio", "À installer avec les bonnes charges de travail."),
     ".ipynb": ("Jupyter / Python", r"python|anaconda|jupyter", "Recréer les environnements (requirements)."),
-    ".mdf": ("SQL Server", r"sql server", "Base attachée : passer par une sauvegarde native."),
+    ".mdf": ("SQL Server", r"(?<!my)sql server", "Base attachée : passer par une sauvegarde native."),
     ".bak": ("Sauvegardes (SQL ?)", r"", "À examiner : peut être une sauvegarde de base de données."),
     ".vmdk": ("Machine virtuelle", r"vmware|virtualbox", "Gros fichier : export/copie à part."),
     ".vhdx": ("Machine virtuelle", r"hyper-v|virtualbox", "Gros fichier : export/copie à part."),

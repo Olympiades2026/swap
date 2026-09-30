@@ -50,11 +50,11 @@ class Excluder:
         return any(fnmatch.fnmatchcase(low, pat) for pat in self.files)
 
 
-def make_excluder(cache: bool = False, extra=(), paths=()) -> Excluder:
+def make_excluder(cache: bool = False, extra=(), paths=(), files=()) -> Excluder:
     dirs = set(BASE_EXCLUDE_DIRS) | {e.lower() for e in extra}
     if cache:
         dirs |= CACHE_EXCLUDE_DIRS
-    return Excluder(dirs, BASE_EXCLUDE_FILES, paths)
+    return Excluder(dirs, list(BASE_EXCLUDE_FILES) + list(files), paths)
 
 
 def attrs(st) -> int:
@@ -135,13 +135,16 @@ def walk(root: str, excluder: Optional[Excluder] = None, on_error: Optional[Call
 class TypeSink:
     """Collecte globale : types de fichiers, fichiers remarquables, plus gros fichiers."""
 
-    def __init__(self, keep_big: int = 20):
+    def __init__(self, keep_big: int = 20, ignore: Optional[Callable] = None):
+        self.ignore = ignore  # chemins à ne pas compter (ex. dossier d'installation d'un logiciel)
         self.exts: Counter = Counter()
         self.notable: dict = defaultdict(list)
         self.big: list = []
         self.keep_big = keep_big
 
     def add(self, path: str, size: int) -> None:
+        if self.ignore and self.ignore(path):
+            return
         ext = os.path.splitext(path)[1].lower()
         if ext:
             self.exts[ext] += 1

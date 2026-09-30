@@ -160,11 +160,11 @@ def hosts_entries() -> list:
 
 def personal_certificates() -> list:
     rows = powershell_json(
-        r"Get-ChildItem Cert:\CurrentUser\My | Select-Object Subject,Thumbprint,HasPrivateKey,FriendlyName,"
+        r"Get-ChildItem Cert:\CurrentUser\My | Select-Object Subject,Issuer,Thumbprint,HasPrivateKey,FriendlyName,"
         r"@{n='NotAfter';e={$_.NotAfter.ToString('yyyy-MM-dd')}} | ConvertTo-Json -Compress"
     )
     return [
-        {"subject": r.get("Subject", ""), "thumbprint": r.get("Thumbprint", ""), "private_key": bool(r.get("HasPrivateKey")),
+        {"subject": r.get("Subject", ""), "issuer": r.get("Issuer", ""), "thumbprint": r.get("Thumbprint", ""), "private_key": bool(r.get("HasPrivateKey")),
          "expires": r.get("NotAfter", ""), "name": r.get("FriendlyName") or ""}
         for r in rows
     ]

@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import os
 import re
 
 from .catalog import APP_ADVICE, GENERIC_ADVICE
+from .util import human_size
+
+GUID_CN_RE = re.compile(r"^CN=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\s*$", re.I)
+MDM_ISSUER_RE = re.compile(r"mdm|intune|sccm|device", re.I)
+INSTALLER_EXTS = {".iso", ".msu", ".cab", ".img"}
 
 ORDER = {"critique": 0, "important": 1, "info": 2}
 
@@ -19,12 +25,18 @@ def compute_advice(inv: dict) -> list:
             advice.append({"level": level, "text": f"{text}  (détecté : {', '.join(matches[:3])}{'…' if len(matches) > 3 else ''})"})
 
     sysinfo = inv.get("system", {})
-    certs = [c for c in sysinfo.get("certificates", []) if c.get("private_key")]
-    if certs:
+    with_key = [c for c in sysinfo.get("certificates", []) if c.get("private_key")]
+    managed = [c for c in with_key if GUID_CN_RE.match(c.get("subject", "")) or MDM_ISSUER_RE.search(c.get("issuer", ""))]
+    personal = [c for c in with_key if c not in managed]
+    if personal:
         advice.append({"level": "critique", "text": (
-            f"{len(certs)} certificat(s) personnel(s) avec clé privée dans le magasin Windows (signature, authentification, S/MIME). "
+            f"{len(personal)} certificat(s) personnel(s) avec clé privée dans le magasin Windows (signature, authentification, S/MIME). "
             "Ils ne sont PAS copiés. Exportez-les en .pfx avec un mot de passe (certmgr.msc > Personnel > Toutes les tâches > Exporter) "
             "ou faites-en redélivrer de nouveaux ; s'ils sont non exportables, demandez-les à la DSI.")})
+    if managed:
+        advice.append({"level": "info", "text": (
+            f"{len(managed)} certificat(s) d'appareil géré par l'entreprise (Intune/MDM) : rien à exporter, il est réémis automatiquement "
+            "quand le nouveau poste est enrôlé.")})
 
     notable = inv.get("notable_files", {})
     if notable.get(".pst"):
@@ -33,6 +45,13 @@ def compute_advice(inv: dict) -> list:
         advice.append({"level": "important", "text": "Base(s) KeePass (.kdbx) trouvée(s) : à copier et à ouvrir avec KeePass sur le nouveau poste."})
     if inv.get("big_files"):
         advice.append({"level": "info", "text": f"{len(inv['big_files'])} très gros fichier(s) (≥ 500 Mo) : machines virtuelles, ISO, archives... Vérifiez la place sur le support de copie."})
+
+    installers = [b for b in inv.get("big_files", []) if os.path.splitext(b["path"])[1].lower() in INSTALLER_EXTS]
+    if installers:
+        total = sum(b["size"] for b in installers)
+        advice.append({"level": "important", "text": (
+            f"Au moins {human_size(total)} d'images disque et de mises à jour ({', '.join(sorted({os.path.splitext(b['path'])[1] for b in installers}))}) "
+            "dans vos dossiers : elles se re-téléchargent. Pour ne pas les copier, ajoutez à la commande copy : --exclude *.iso *.msu *.cab")})
 
     items = inv.get("items", [])
     drives = [i for i in items if i["category"] == "Autres disques" or i["category"].startswith("Dossiers hors profil")]

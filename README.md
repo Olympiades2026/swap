@@ -41,6 +41,9 @@ Copie les éléments cochés par défaut (ou choisis avec `-i`, `--only`, `--ski
 - Fichiers verrouillés (Outlook ouvert…) : notés dans `erreurs.log`, la copie continue ; fermer l'appli et relancer.
 - `--hash` calcule une empreinte SHA-256 par fichier (plus lent, permet `verify --deep`).
 - `--dry-run` simule sans rien écrire. Vérifie aussi la place disponible.
+- `--exclude *.iso *.msu` : ne copie pas ces fichiers (images disque, mises à jour… qui se re-téléchargent).
+- À la racine des disques, les dossiers qui sont des **logiciels installés** (reconnus par leur nom ou leur éditeur), des installations WinDev ou du temporaire sont **décochés**, mais ce qui vous appartient dedans est proposé à part : `www` de Laragon/XAMPP/WAMP, dossier `Personal` de WinDev/WebDev.
+- Les liens/jonctions Windows (« Menu Démarrer », « Voisinage réseau »…) et les dossiers vides sont ignorés.
 
 Ignorés volontairement : corbeille, caches des navigateurs, `node_modules`, `__pycache__`, `.venv`, fichiers temporaires et verrous Office (`~$*`).
 Les fichiers OneDrive « en ligne uniquement » ne sont **pas** téléchargés. Les dossiers Bureau/Documents redirigés vers OneDrive sont décochés par défaut (ils se resynchronisent sur le nouveau poste), tu peux les recocher.
@@ -63,7 +66,7 @@ ou en ligne de commande : `--map "pcsoft-projet=C:\Mes Projets"` (sur `copy` ou 
 
 ### PC SOFT (WinDev / WebDev / HFSQL)
 
-L'analyse repère les projets (`.wdp`, `.wwp`, `.wpp`) et les données HFSQL (`.fic`, `.ndx`, `.mmo`) **où qu'ils soient** (Documents, `C:\Mes Projets`, un autre disque…). Chaque dossier de projet ou de données devient un élément à part (`pcsoft-projet-…`, `pcsoft-donnees-…`), donc redirigeable par une règle, et n'est pas copié en double avec son dossier parent. Le rapport rappelle les pièges : licences/dongle, même version de WinDev pour rouvrir les projets, copie des données HFSQL applications arrêtées.
+L'analyse ignore volontairement le dossier d'**installation** de WinDev/WebDev (`C:\PC SOFT\WINDEV…` : exemples, framework, aide), qui se réinstalle, et n'en garde que le dossier `Personal`. Elle repère les projets (`.wdp`, `.wwp`, `.wpp`) et les données HFSQL (`.fic`, `.ndx`, `.mmo`) **où qu'ils soient** (Documents, `C:\Mes Projets`, un autre disque…). Chaque dossier de projet ou de données devient un élément à part (`pcsoft-projet-…`, `pcsoft-donnees-…`), donc redirigeable par une règle, et n'est pas copié en double avec son dossier parent. Le rapport rappelle les pièges : licences/dongle, même version de WinDev pour rouvrir les projets, copie des données HFSQL applications arrêtées.
 
 ### `verify`
 Compare la sauvegarde à son manifeste (fichiers manquants, tailles, et contenu avec `--deep`).

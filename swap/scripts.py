@@ -6,6 +6,9 @@ import re
 from datetime import datetime
 
 
+IP_PORT_RE = re.compile(r"^(?:IP_)?(\d+\.\d+\.\d+\.\d+)$")
+
+
 def psq(text: str) -> str:
     """Chaîne PowerShell entre apostrophes (les apostrophes internes sont doublées)."""
     return "'" + str(text).replace("'", "''") + "'"
@@ -36,14 +39,26 @@ def build_setup_script(inv: dict) -> str:
         lines.append("")
     local = [p for p in s.get("printers", []) if not p["network_path"]]
     if local:
-        lines.append("# --- Imprimantes locales / IP : à recréer à la main (pilote + port) ---")
-        lines += [f"#   {p['name']}  (pilote : {p['driver']}, port : {p['port']})" for p in local]
+        lines.append("# --- Imprimantes locales / IP (le pilote indiqué doit être installé avant) ---")
+        for p in local:
+            m = IP_PORT_RE.match(p["port"] or "")
+            if m:
+                lines.append(f"Add-PrinterPort -Name {psq(p['port'])} -PrinterHostAddress {psq(m.group(1))} -ErrorAction SilentlyContinue")
+                lines.append(f"Add-Printer -Name {psq(p['name'])} -DriverName {psq(p['driver'])} -PortName {psq(p['port'])}")
+            else:
+                lines.append(f"#   {p['name']}  (pilote : {p['driver']}, port : {p['port']}) : à recréer à la main")
         lines.append("")
-    env = {k: v for k, v in (s.get("env") or {}).items() if k.upper() != "PATH"}
-    if env:
-        lines.append("# --- Variables d'environnement utilisateur (PATH volontairement exclu) ---")
+    env = {k: v for k, v in (s.get("env") or {}).items() if k.upper() != "PATH" and not k.lower().startswith("onedrive")}
+    path_value = next((v for k, v in (s.get("env") or {}).items() if k.upper() == "PATH"), "")
+    extra_path = [p for p in path_value.split(";") if p.strip() and "windowsapps" not in p.lower()]
+    if env or extra_path:
+        lines.append("# --- Variables d'environnement utilisateur (OneDrive* exclues : propres à ce profil) ---")
         for k, v in env.items():
             lines.append(f"[Environment]::SetEnvironmentVariable({psq(k)}, {psq(v)}, 'User')")
+        if extra_path:
+            lines.append("$p = [Environment]::GetEnvironmentVariable('Path', 'User')")
+            lines.append("foreach ($add in @(" + ", ".join(psq(x) for x in extra_path) + ")) { if (($p -split ';') -notcontains $add) { $p = $p.TrimEnd(';') + ';' + $add } }")
+            lines.append("[Environment]::SetEnvironmentVariable('Path', $p, 'User')")
         lines.append("")
     real = [a for a in inv.get("apps", []) if not a.get("component")]
     auto = [a for a in real if a.get("winget_id")]

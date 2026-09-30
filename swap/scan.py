@@ -12,8 +12,8 @@ from typing import Callable, Optional
 
 from . import __version__, apps, system
 from .advice import compute_advice
-from .catalog import APP_CONFIGS, EXT_HINTS
-from .fs import TypeSink, collect, is_hidden_or_system, make_excluder
+from .catalog import APP_CONFIGS, EXT_HINTS, GENERIC_WORDS, INSTALL_KEEP, NOISE_ROOT_RE
+from .fs import FILE_ATTRIBUTE_REPARSE_POINT, TypeSink, attrs, collect, is_hidden_or_system, make_excluder
 from .locations import KNOWN_FOLDERS, Locations
 from .model import Item
 from .util import is_under, is_windows, slugify
@@ -25,6 +25,56 @@ SYSTEM_ROOT_DIRS = {
     "$recycle.bin", "windows.old", "amd", "nvidia", "drivers", "inetpub",
 }
 SKIP_HOME_DIRS = {"appdata", "application data", "local settings", "3d objects", "searches", "links", "saved games", "contacts", "favorites"}
+
+
+# Installation de WinDev/WebDev : C:\PC SOFT\WINDEV Suite SaaS 2025\... (exemples, langages, framework : rien à migrer)
+PCSOFT_INSTALL_RE = re.compile(r"[\\/]pc soft[\\/](windev|webdev)[^\\/]*", re.I)
+
+
+def pcsoft_install_root(path: str):
+    m = PCSOFT_INSTALL_RE.search(path)
+    return path[: m.end()] if m else None
+
+
+def is_reparse(path: str) -> bool:
+    """Lien symbolique ou jonction (ex. « Menu Démarrer », « Voisinage réseau » dans un profil) : à ne pas suivre."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return True
+    return os.path.islink(path) or bool(attrs(st) & FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def drive_tag(root: str) -> str:
+    drive = os.path.splitdrive(root)[0].rstrip(":")
+    return slugify(drive) if drive else "x"
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def app_tokens(app_list: list) -> dict:
+    """{mot-clé: nom d'appli} pour reconnaître qu'un dossier de C:\ appartient à un logiciel installé."""
+    tokens: dict = {}
+    for app in app_list:
+        for source in (re.sub(r"[\d.]+", " ", app["name"]), app.get("publisher", "")):
+            words = re.findall(r"[a-z0-9]+", source.lower())
+            cands = [w for w in words if len(w) >= 5 and w not in GENERIC_WORDS]
+            if len(words) >= 2:
+                cands.append(words[0] + words[1])
+            for tok in cands:
+                if len(tok) >= 5:
+                    tokens.setdefault(tok, app["name"])
+    return tokens
+
+
+def match_app(folder: str, tokens: dict):
+    n = _norm(folder)
+    for tok, name in tokens.items():
+        if n == tok:  # égalité stricte : « Applications_CLMB » ne doit pas être pris pour « Application Compatibility… »
+            return name
+    return None
 
 
 def fixed_drives() -> list:
@@ -42,10 +92,11 @@ def fixed_drives() -> list:
 
 
 class _Scanner:
-    def __init__(self, loc: Locations, progress: Optional[Callable[[str], None]]):
+    def __init__(self, loc: Locations, progress: Optional[Callable[[str], None]], tokens: Optional[dict] = None):
         self.loc = loc
         self.progress = progress or (lambda _msg: None)
-        self.sink = TypeSink()
+        self.tokens = tokens or {}
+        self.sink = TypeSink(ignore=lambda p: pcsoft_install_root(p) is not None)
         self.items: list = []
         self.onedrive = loc.onedrive_roots()
         self._last = 0.0
@@ -58,13 +109,15 @@ class _Scanner:
                 self.progress(f"{label} : {stats.files} fichiers")
         return cb
 
-    def add(self, item_id, label, kind, src, target, category, *, cache=False, extra=(), track=False, **kw):
+    def add(self, item_id, label, kind, src, target, category, *, cache=False, extra=(), track=False, skip_empty=False, **kw):
         self.progress(f"Analyse : {label}")
         base_id, n = item_id, 2
         while any(i.id == item_id for i in self.items):
             item_id, n = f"{base_id}-{n}", n + 1
         exc = make_excluder(cache=cache, extra=extra)
         stats = collect(src, exc, self.sink if track else None, self._tick(label))
+        if skip_empty and stats.files == 0 and stats.size == 0:
+            return None
         item = Item(
             id=item_id, label=label, kind=kind, src=src, target=target, category=category, size=stats.size, files=stats.files,
             cloud_files=stats.placeholders, cache_excludes=cache, extra_excludes=list(extra), **kw,
@@ -94,17 +147,17 @@ class _Scanner:
             return
         for name in names:
             path = os.path.join(self.loc.home, name)
-            if name.startswith(".") or name.lower() in SKIP_HOME_DIRS or not os.path.isdir(path) or os.path.islink(path):
+            if name.startswith(".") or name.lower() in SKIP_HOME_DIRS or not os.path.isdir(path) or is_reparse(path):
                 continue
             try:
-                if is_hidden_or_system(os.stat(path)):
+                if is_hidden_or_system(os.lstat(path)):
                     continue
             except OSError:
                 continue
             if any(is_under(path, r) for r in self.onedrive) or any(is_under(k, path) or is_under(path, k) for k in known_paths):
                 continue
             self.add(f"profil-{slugify(name)}", f"Dossier du profil : {name}", "dir", path, {"kind": "home", "rel": name},
-                     "Dossiers personnels", track=True)
+                     "Dossiers personnels", track=True, skip_empty=True)
 
     def app_configs(self):
         roots = {"appdata": self.loc.appdata, "localappdata": self.loc.localappdata, "home": self.loc.home,
@@ -127,6 +180,43 @@ class _Scanner:
                             kind="registry", src=key, target={"kind": "registry"}, category="Configuration des applications",
                             default=cfg.default, sensitive=cfg.sensitive, note=cfg.note))
 
+    def classify_root(self, name: str, path: str):
+        """(coché par défaut ?, remarque) pour un dossier posé à la racine d'un disque."""
+        try:
+            children = os.listdir(path)
+        except OSError:
+            children = []
+        if name.lower() == "pc soft" or any(re.match(r"(windev|webdev)", c, re.I) for c in children if os.path.isdir(os.path.join(path, c))):
+            return False, ("Installation de WinDev/WebDev (exemples, framework, aide…) : à réinstaller avec l'installateur PC SOFT / "
+                           "votre abonnement, pas à copier. Vos préférences (dossier « Personal ») sont proposées à part. Cochez pour tout copier.")
+        if NOISE_ROOT_RE.search(name):
+            return False, "Dossier technique ou temporaire (installateurs, ISO…) : cochez-le si vous y avez rangé des fichiers à conserver."
+        app = match_app(name, self.tokens)
+        if app:
+            return False, (f"Correspond au logiciel installé « {app} » : à réinstaller plutôt que copier. "
+                           "Cochez-le si vous y avez rangé vos propres fichiers.")
+        return True, "Vérifiez son contenu : peut contenir un logiciel installé (à réinstaller plutôt que copier)."
+
+    def keep_user_data(self, parent: Item, category: str) -> None:
+        """Dans un dossier de logiciel décoché, propose à part ce qui est à vous (sites Laragon, préférences WinDev…)."""
+        name = os.path.basename(parent.src.rstrip("\\/"))
+        keeps = [(os.path.join(parent.src, sub), f"{name} : {sub}", category) for sub in INSTALL_KEEP.get(name.lower(), [])]
+        if name.lower() == "pc soft":
+            for child in sorted(os.listdir(parent.src), key=str.lower):
+                if re.match(r"(windev|webdev)", child, re.I):
+                    keeps.append((os.path.join(parent.src, child, "Personal"), f"PC SOFT : préférences {child} (Personal)",
+                                  "PC SOFT (WinDev / WebDev / HFSQL)"))
+        for path, label, cat in keeps:
+            if not os.path.isdir(path):
+                continue
+            item = self.add(f"garder-{slugify(name)}-{slugify(os.path.basename(path))}", label, "dir", path,
+                            {"kind": "abs", "path": path}, cat, skip_empty=True,
+                            note=f"Ce qui vous appartient dans « {name} » (le reste du dossier se réinstalle).")
+            if item:
+                parent.exclude_paths.append(path)
+                parent.size = max(0, parent.size - item.size)
+                parent.files = max(0, parent.files - item.files)
+
     def outside_profile(self):
         """Dossiers posés à la racine des disques (C:\\Projets, D:\\Data...) : là où on oublie le plus de choses."""
         for root in fixed_drives():
@@ -137,17 +227,19 @@ class _Scanner:
             system_drive = os.path.normcase(root).startswith(os.path.normcase(os.environ.get("SystemDrive", "C:")))
             for name in names:
                 path = os.path.join(root, name)
-                if name.lower() in SYSTEM_ROOT_DIRS or name.startswith("$") or not os.path.isdir(path) or os.path.islink(path):
+                if name.lower() in SYSTEM_ROOT_DIRS or name.startswith("$") or not os.path.isdir(path) or is_reparse(path):
                     continue
                 try:
-                    if is_hidden_or_system(os.stat(path)):
+                    if is_hidden_or_system(os.lstat(path)):
                         continue
                 except OSError:
                     continue
                 category = "Dossiers hors profil (disque système)" if system_drive else "Autres disques"
-                self.add(f"disque-{slugify(root[:1])}-{slugify(name)}", f"{root}{name}", "dir", path, {"kind": "abs", "path": path},
-                         category, track=True,
-                         note="Peut contenir un logiciel installé (à réinstaller plutôt que copier) : vérifiez avant de cocher.")
+                default, note = self.classify_root(name, path)
+                item = self.add(f"disque-{drive_tag(root)}-{slugify(name)}", path, "dir", path, {"kind": "abs", "path": path},
+                                category, track=True, skip_empty=True, default=default, note=note)
+                if item is not None and not default:
+                    self.keep_user_data(item, category)
 
 
 def _registry_key_exists(key: str) -> bool:
@@ -211,7 +303,10 @@ def carve_out_roots(scanner: "_Scanner") -> None:
 
 def run_scan(loc: Optional[Locations] = None, progress: Optional[Callable[[str], None]] = None, with_system: bool = True) -> dict:
     loc = loc or Locations.detect()
-    scanner = _Scanner(loc, progress)
+    if progress:
+        progress("Applications installées...")
+    app_list = apps.installed_apps()
+    scanner = _Scanner(loc, progress, app_tokens(app_list))
     scanner.known_folders()
     scanner.home_extras()
     scanner.app_configs()
@@ -219,9 +314,6 @@ def run_scan(loc: Optional[Locations] = None, progress: Optional[Callable[[str],
     dedupe_overlaps(scanner.items)
     carve_out_roots(scanner)
 
-    if progress:
-        progress("Applications installées...")
-    app_list = apps.installed_apps()
     if app_list and progress:
         progress("Correspondance avec winget...")
     winget = apps.winget_map() if app_list else {}
@@ -237,7 +329,7 @@ def run_scan(loc: Optional[Locations] = None, progress: Optional[Callable[[str],
     for ext, (label, app_re, advice) in EXT_HINTS.items():
         count = sink.exts.get(ext, 0)
         if count:
-            installed = bool(app_re and re.search(app_re, names, re.I)) if app_list else None
+            installed = bool(re.search(app_re, names, re.I)) if (app_list and app_re) else None
             hints.append({"ext": ext, "software": label, "count": count, "installed": installed, "advice": advice})
     hints.sort(key=lambda h: -h["count"])
 
