@@ -10,7 +10,7 @@ import threading
 
 from swap import apps, cli, fs, installers, net, redirects, sink as sink_mod, transfer
 from swap.sink import Cancelled, SinkError
-from swap.locations import Locations
+from swap.locations import Locations, find_profile, list_profiles, profile_label
 from swap.model import Item
 from swap.scan import dedupe_overlaps, run_scan
 from swap.scripts import build_setup_script, psq
@@ -281,7 +281,7 @@ class TransferTests(unittest.TestCase):
     def test_cli_end_to_end(self):
         out = os.path.join(self.tmp.name, "sortie")
         with mock.patch("swap.cli.Locations.detect", return_value=self.loc), \
-                mock.patch("swap.cli.run_scan", side_effect=lambda **kw: run_scan(self.loc, **kw)):
+                mock.patch("swap.cli.run_scan", side_effect=lambda _loc=None, **kw: run_scan(self.loc, **kw)):
             self.assertEqual(cli.main(["scan", "--out", out]), 0)
             self.assertEqual(cli.main(["copy", "--dest", self.dest, "--out", out, "-y", "--skip", "ssh"]), 0)
             backup = os.path.join(self.dest, os.listdir(self.dest)[0])
@@ -455,7 +455,7 @@ class NetworkTests(unittest.TestCase):
     def test_cli_copy_host(self):
         out = os.path.join(self.tmp.name, "sortie")
         common = ["--host", "127.0.0.1", "--port", str(self.rx.port), "--out", out, "-y"]
-        with mock.patch("swap.cli.run_scan", side_effect=lambda **kw: run_scan(self.loc, **kw)):
+        with mock.patch("swap.cli.run_scan", side_effect=lambda _loc=None, **kw: run_scan(self.loc, **kw)):
             self.assertEqual(cli.main(["scan", "--out", out]), 0)
             self.assertEqual(cli.main(["copy", *common, "--code", "WRONG-CODE2"]), 2)          # message clair, pas de trace
             self.assertEqual(cli.main(["copy", *common, "--code", "abcde-fgh23", "--dry-run"]), 0)
@@ -782,7 +782,7 @@ class PcSoftTests(unittest.TestCase):
         out = os.path.join(self.tmp.name, "sortie")
         target = os.path.join(self.tmp.name, "MesProjets")
         with mock.patch("swap.cli.Locations.detect", return_value=self.loc), \
-                mock.patch("swap.cli.run_scan", side_effect=lambda **kw: run_scan(self.loc, **kw)):
+                mock.patch("swap.cli.run_scan", side_effect=lambda _loc=None, **kw: run_scan(self.loc, **kw)):
             self.assertEqual(cli.main(["scan", "--out", out]), 0)
             self.assertTrue(os.path.exists(os.path.join(out, "regles.txt")))
             with open(os.path.join(out, "regles.txt"), "a", encoding="utf-8") as fh:
@@ -812,6 +812,157 @@ class RulesTests(unittest.TestCase):
 
     def test_template_has_no_active_rule(self):
         self.assertEqual(redirects.parse_rules(redirects.TEMPLATE.splitlines()), [])
+
+
+class ProfileTests(unittest.TestCase):
+    """Choix de l'utilisateur : profils de C:\\Users, analyse d'un autre compte, restauration dans un autre compte."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = os.path.join(self.tmp.name, "Users")
+        for name in ("alice", "bob", "Public", "Default", "All Users"):
+            os.makedirs(os.path.join(self.base, name))
+        write(os.path.join(self.base, "alice", "Documents", "contrat.docx"), "contrat")
+        write(os.path.join(self.base, "alice", "Desktop", "todo.txt"), "todo")
+        write(os.path.join(self.base, "alice", "AppData", "Roaming", "Notepad++", "config.xml"), "<cfg/>")
+        write(os.path.join(self.base, "bob", "Documents", "bob.txt"), "bob")
+        self.alice = os.path.join(self.base, "alice")
+        self.bob = os.path.join(self.base, "bob")
+        self.mine = mock.patch("os.path.expanduser", side_effect=lambda p: self.bob if p == "~" else p)
+        self.mine.start()
+        self.addCleanup(self.mine.stop)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_list_profiles_skips_system_accounts_and_puts_current_first(self):
+        profiles = list_profiles(self.base)
+        self.assertEqual([p["name"] for p in profiles], ["bob", "alice"])
+        self.assertEqual([p["current"] for p in profiles], [True, False])
+        self.assertIn("compte connecté", profile_label(profiles[0]))
+        self.assertIn("dernière utilisation", profile_label(profiles[1]))
+
+    def test_windows_ignores_folders_that_are_not_profiles(self):
+        os.makedirs(os.path.join(self.base, "Partage"))
+        write(os.path.join(self.alice, "NTUSER.DAT"), "hive")
+        with mock.patch("swap.locations.is_windows", return_value=True):
+            names = [p["name"] for p in list_profiles(self.base)]
+        self.assertEqual(names, ["bob", "alice"])   # bob (compte connecté) est toujours proposé ; Public, Default et Partage non
+        self.assertNotIn("Partage", names)
+        self.assertNotIn("Public", names)
+
+    def test_connected_account_is_always_offered(self):
+        self.mine.stop()
+        elsewhere = os.path.join(self.tmp.name, "D-profils", "carol")
+        os.makedirs(elsewhere)
+        with mock.patch("os.path.expanduser", side_effect=lambda p: elsewhere if p == "~" else p):
+            profiles = list_profiles(self.base)
+        self.assertEqual(profiles[0]["name"], "carol")
+        self.assertTrue(profiles[0]["current"])
+        self.mine.start()
+
+    def test_find_profile_by_name_or_path(self):
+        self.assertEqual(find_profile("ALICE", self.base), self.alice)
+        self.assertEqual(find_profile(self.bob, self.base), self.bob)
+        with self.assertRaises(ValueError) as cm:
+            find_profile("zoe", self.base)
+        self.assertIn("alice", str(cm.exception))
+
+    def test_for_profile_other_account_is_not_current(self):
+        loc = Locations.for_profile(self.alice)
+        self.assertFalse(loc.current)
+        self.assertEqual(loc.user, "alice")
+        self.assertEqual(loc.known["Documents"], os.path.join(self.alice, "Documents"))
+        self.assertEqual(loc.appdata, os.path.join(self.alice, ".config") if os.name != "nt" else os.path.join(self.alice, "AppData", "Roaming"))
+        self.assertTrue(Locations.for_profile(self.bob).current)
+
+    def test_for_profile_follows_onedrive_redirected_folders(self):
+        os.makedirs(os.path.join(self.alice, "Documents"), exist_ok=True)
+        os.remove(os.path.join(self.alice, "Documents", "contrat.docx"))
+        write(os.path.join(self.alice, "OneDrive - Société", "Documents", "contrat.docx"), "contrat")
+        loc = Locations.for_profile(self.alice)
+        self.assertEqual(loc.known["Documents"], os.path.join(self.alice, "OneDrive - Société", "Documents"))
+        self.assertEqual(loc.known["Desktop"], os.path.join(self.alice, "Desktop"))   # celui-là n'est pas redirigé
+        self.assertTrue(loc.in_onedrive(loc.known["Documents"]))
+
+    def test_scan_of_another_profile_lists_only_that_profile(self):
+        inv = run_scan(Locations.for_profile(self.alice))
+        self.assertEqual(inv["meta"]["user"], "alice")
+        self.assertFalse(inv["meta"]["profile_current"])
+        ids = {i["id"] for i in inv["items"]}
+        self.assertIn("dossier-documents", ids)
+        self.assertIn("dossier-desktop", ids)
+        docs = next(i for i in inv["items"] if i["id"] == "dossier-documents")
+        self.assertEqual(docs["src"], os.path.join(self.alice, "Documents"))
+        self.assertFalse(any(i["src"].startswith(self.bob) for i in inv["items"]))
+        self.assertTrue(any("autre compte" in a["text"] for a in inv["advice"]))
+        self.assertFalse([i for i in inv["items"] if i["kind"] == "registry"])
+
+    def test_scan_of_connected_account_has_no_profile_warning(self):
+        inv = run_scan(Locations.for_profile(self.bob))
+        self.assertTrue(inv["meta"]["profile_current"])
+        self.assertFalse(any("autre compte" in a["text"] for a in inv["advice"]))
+
+    def test_restore_into_another_profile(self):
+        src = run_scan(Locations.for_profile(self.alice))
+        items = [Item.from_dict(d) for d in src["items"] if d["default"]]
+        summary = transfer.run_backup(items, src, os.path.join(self.tmp.name, "usb"))
+        self.assertEqual(summary["errors"], [])
+        target = os.path.join(self.tmp.name, "Users", "carol")
+        os.makedirs(target)
+        res = transfer.run_restore(summary["backup"], Locations.for_profile(target))
+        self.assertEqual(res["errors"], [])
+        self.assertEqual(read(os.path.join(target, "Documents", "contrat.docx")), "contrat")
+        self.assertEqual(read(os.path.join(target, "Desktop", "todo.txt")), "todo")
+        self.assertFalse(os.path.exists(os.path.join(self.bob, "Documents", "contrat.docx")))   # le compte connecté n'est pas touché
+
+    def test_registry_is_not_imported_into_another_profile(self):
+        src = run_scan(Locations.for_profile(self.alice))
+        summary = transfer.run_backup([Item.from_dict(d) for d in src["items"] if d["default"]], src, os.path.join(self.tmp.name, "usb"))
+        manifest_path = os.path.join(summary["backup"], "manifest.json")
+        manifest = json.loads(read(manifest_path))
+        reg = Item(id="registre-test", label="Réglages test", kind="registry", src=r"HKCU\\Software\\Test", target={"kind": "registry"},
+                   category="Configuration des applications")
+        manifest["items"].append(reg.to_dict())
+        with open(manifest_path, "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh)
+        write(os.path.join(summary["backup"], "data", "registre-test", "export.reg"), "Windows Registry Editor")
+        with mock.patch("swap.transfer.subprocess.run") as run:
+            res = transfer.run_restore(summary["backup"], Locations.for_profile(os.path.join(self.tmp.name, "Users", "carol")))
+        run.assert_not_called()
+        self.assertEqual(res["items"]["registre-test"]["restored"], 0)
+        self.assertTrue(any("compte connecté" in e for e in res["errors"]))
+
+    def test_cli_profiles_and_user_option(self):
+        with mock.patch("swap.locations.users_dir", return_value=self.base):
+            self.assertEqual(cli.main(["profiles"]), 0)
+            out = os.path.join(self.tmp.name, "sortie")
+            self.assertEqual(cli.main(["scan", "--user", "alice", "--out", out]), 0)
+            inv = json.loads(read(os.path.join(out, "inventaire.json")))
+            self.assertEqual(inv["meta"]["user"], "alice")
+            with self.assertRaises(SystemExit) as cm:
+                cli.main(["scan", "--user", "zoe", "--out", out])
+            self.assertIn("introuvable", str(cm.exception))
+
+    def test_cli_restore_user_option(self):
+        src = run_scan(Locations.for_profile(self.alice))
+        summary = transfer.run_backup([Item.from_dict(d) for d in src["items"] if d["default"]], src, os.path.join(self.tmp.name, "usb"))
+        with mock.patch("swap.locations.users_dir", return_value=self.base):
+            self.assertEqual(cli.main(["restore", "--backup", summary["backup"], "--user", "bob"]), 0)
+        self.assertEqual(read(os.path.join(self.bob, "Documents", "contrat.docx")), "contrat")
+
+    def test_session_uses_chosen_source_profile(self):
+        from swap.session import Job, Session
+
+        session = Session(os.path.join(self.tmp.name, "sortie"))
+        session.profiles_base = self.base
+        self.assertEqual([p["name"] for p in session.profiles()], ["bob", "alice"])
+        session.source_home = self.alice
+        job = Job(session.scan)
+        job.start()
+        job.finished.wait(30)
+        self.assertIsNone(job.error, job.trace)
+        self.assertEqual(session.inv["meta"]["user"], "alice")
 
 
 class MiscTests(unittest.TestCase):

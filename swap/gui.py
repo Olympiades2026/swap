@@ -18,7 +18,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinter import font as tkfont
 
-from . import __version__, net
+from . import __version__, net, transfer
+from .locations import profile_label
 from .session import Job, Session, find_backups
 from .sink import SinkError
 from .util import human_size, is_windows
@@ -95,6 +96,10 @@ class App(tk.Tk):
         self.v_rx_port = tk.StringVar(value=str(net.DEFAULT_PORT))
         self.v_rx_fw = tk.BooleanVar(value=True)
         self.v_backup = tk.StringVar()
+        self.v_source_profile = tk.StringVar()
+        self.v_target_profile = tk.StringVar()
+        self.v_backup_hint = tk.StringVar()
+        self._profiles: list = []
         self.v_overwrite = tk.BooleanVar(value=False)
         self.v_restore_dry = tk.BooleanVar(value=False)
 
@@ -105,10 +110,12 @@ class App(tk.Tk):
         self._build_choose_tab()
         self._build_send_tab()
         self._build_receive_tab()
+        self._refresh_profiles()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._rx_poll_id = self.after(150, self._poll_receiver)
         if backup:  # lancé depuis RESTAURER.bat : on va directement à la restauration de ce dossier
             self.v_backup.set(os.path.normpath(backup))
+            self._update_backup_hint()
             self.nb.select(3)
 
     def destroy(self) -> None:
@@ -140,6 +147,15 @@ class App(tk.Tk):
         ttk.Label(tab, wraplength=980, justify="left", text=(
             "swap parcourt ce poste (dossiers, applications, imprimantes, lecteurs réseau, certificats…) et prépare la liste de "
             "tout ce qui doit être migré. Cette étape ne modifie rien : elle lit seulement.")).pack(anchor="w")
+        prof = ttk.Frame(tab)
+        prof.pack(fill="x", pady=(PAD, 0))
+        ttk.Label(prof, text="Utilisateur à migrer :", style="Head.TLabel").pack(side="left")
+        self.cmb_source = ttk.Combobox(prof, textvariable=self.v_source_profile, state="readonly", width=48)
+        self.cmb_source.pack(side="left", padx=6)
+        ttk.Button(prof, text="Actualiser", command=self._refresh_profiles).pack(side="left")
+        self.cmb_source.bind("<<ComboboxSelected>>", lambda _e: self._sync_source_profile())
+        self.v_profile_note = tk.StringVar()
+        ttk.Label(tab, textvariable=self.v_profile_note, foreground="#8a5a00", wraplength=980, justify="left").pack(anchor="w")
         row = ttk.Frame(tab)
         row.pack(fill="x", pady=PAD)
         self.btn_scan = ttk.Button(row, text="Analyser ce poste", style="Big.TButton", command=self.on_scan)
@@ -158,7 +174,36 @@ class App(tk.Tk):
         self.ui_scan = SimpleNamespace(bar=self.scan_bar, status=self.v_scan_status, log=None, cancel=self.btn_scan_cancel,
                                        actions=[self.btn_scan], done=self._scan_done)
 
+    # -- choix du compte utilisateur ----------------------------------------------------------------------------
+    def _refresh_profiles(self) -> None:
+        self._profiles = self.session.profiles()
+        labels = [profile_label(p) for p in self._profiles]
+        for combo, var in ((self.cmb_source, self.v_source_profile), (self.cmb_target, self.v_target_profile)):
+            combo["values"] = labels
+            if var.get() not in labels:
+                var.set(labels[0] if labels else "")
+        self._sync_source_profile()
+
+    def _chosen_profile(self, var: tk.StringVar) -> Optional[dict]:
+        return next((p for p in self._profiles if profile_label(p) == var.get()), None)
+
+    def _chosen_home(self, var: tk.StringVar) -> str:
+        """Chemin du profil choisi, ou '' pour le compte connecté (détection complète, registre compris)."""
+        prof = self._chosen_profile(var)
+        return "" if prof is None or prof["current"] else prof["path"]
+
+    def _sync_source_profile(self) -> None:
+        self.session.source_home = self._chosen_home(self.v_source_profile)
+        prof = self._chosen_profile(self.v_source_profile)
+        if prof and not prof["current"]:
+            self.v_profile_note.set(
+                f"Vous analysez le profil de « {prof['name']} » depuis un autre compte (droits administrateur nécessaires). Fichiers et "
+                "configuration des applications sont lus ; registre, lecteurs réseau, certificats et identifiants ne le sont pas.")
+        else:
+            self.v_profile_note.set("")
+
     def on_scan(self) -> None:
+        self._sync_source_profile()
         self._set_text(self.txt_summary, "")
         self.start_job(self.session.scan, self.ui_scan)
 
@@ -184,7 +229,8 @@ class App(tk.Tk):
             self.v_scan_status.set(f"Analyse chargée : {path}")
 
     def _after_inventory(self) -> None:
-        self.lbl_source.config(text=f"{self.session.machine}  (ce poste)")
+        user = self.session.inv["meta"].get("user", "") if self.session.inv else ""
+        self.lbl_source.config(text=f"{self.session.machine}  (ce poste)" + (f" — {user}" if user else ""))
         self._set_text(self.txt_summary, "\n".join(self.session.summary_lines()))
         self.btn_report.config(state="normal" if os.path.exists(self.session.report_path()) else "disabled")
         self._refresh_tree()
@@ -495,16 +541,23 @@ class App(tk.Tk):
         rs = ttk.LabelFrame(tab, text="Restaurer sur ce PC", padding=PAD)
         rs.pack(fill="both", expand=True, pady=(PAD, 0))
         ttk.Label(rs, text="Dossier de la sauvegarde (SWAP-…) :").grid(row=0, column=0, sticky="e")
-        ttk.Entry(rs, textvariable=self.v_backup, width=54).grid(row=0, column=1, sticky="w", padx=4)
+        ent_backup = ttk.Entry(rs, textvariable=self.v_backup, width=54)
+        ent_backup.grid(row=0, column=1, sticky="w", padx=4)
+        ent_backup.bind("<FocusOut>", lambda _e: self._update_backup_hint())
         ttk.Button(rs, text="Parcourir…", command=self._browse_backup).grid(row=0, column=2)
+        ttk.Label(rs, text="Restaurer dans le profil :").grid(row=1, column=0, sticky="e", pady=(4, 0))
+        self.cmb_target = ttk.Combobox(rs, textvariable=self.v_target_profile, state="readonly", width=52)
+        self.cmb_target.grid(row=1, column=1, sticky="w", padx=4, pady=(4, 0))
+        ttk.Label(rs, textvariable=self.v_backup_hint, foreground="#8a5a00", wraplength=360, justify="left").grid(
+            row=1, column=2, sticky="w", padx=6)
         ttk.Checkbutton(rs, text="Écraser les fichiers déjà présents (sinon ils sont conservés)", variable=self.v_overwrite).grid(
-            row=1, column=0, columnspan=3, sticky="w")
-        ttk.Checkbutton(rs, text="Simulation (montre où irait chaque élément)", variable=self.v_restore_dry).grid(row=2, column=0, columnspan=3, sticky="w")
-        ttk.Label(rs, text="Règles de destination supplémentaires (motif = dossier) :").grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
+            row=2, column=0, columnspan=3, sticky="w")
+        ttk.Checkbutton(rs, text="Simulation (montre où irait chaque élément)", variable=self.v_restore_dry).grid(row=3, column=0, columnspan=3, sticky="w")
+        ttk.Label(rs, text="Règles de destination supplémentaires (motif = dossier) :").grid(row=4, column=0, columnspan=3, sticky="w", pady=(4, 0))
         self.txt_restore_rules = tk.Text(rs, height=2, width=70, font="TkFixedFont")
-        self.txt_restore_rules.grid(row=4, column=0, columnspan=3, sticky="we")
+        self.txt_restore_rules.grid(row=5, column=0, columnspan=3, sticky="we")
         row = ttk.Frame(rs)
-        row.grid(row=5, column=0, columnspan=3, sticky="w", pady=PAD)
+        row.grid(row=6, column=0, columnspan=3, sticky="w", pady=PAD)
         self.btn_restore = ttk.Button(row, text="Restaurer", style="Big.TButton", command=self.on_restore)
         self.btn_restore.pack(side="left")
         self.btn_restore_cancel = ttk.Button(row, text="Annuler", command=self.on_cancel, state="disabled")
@@ -513,12 +566,12 @@ class App(tk.Tk):
         self.btn_script.pack(side="left", padx=(24, 0))
         ttk.Button(row, text="Ouvrir le rapport", command=self.on_open_backup_report).pack(side="left", padx=6)
         self.restore_bar = ttk.Progressbar(rs, mode="determinate", maximum=100)
-        self.restore_bar.grid(row=6, column=0, columnspan=3, sticky="we")
+        self.restore_bar.grid(row=7, column=0, columnspan=3, sticky="we")
         self.v_restore_status = tk.StringVar(value="")
-        ttk.Label(rs, textvariable=self.v_restore_status).grid(row=7, column=0, columnspan=3, sticky="w")
+        ttk.Label(rs, textvariable=self.v_restore_status).grid(row=8, column=0, columnspan=3, sticky="w")
         self.txt_restore_log = self._text(rs, height=8, pack=False)
-        self.txt_restore_log._frame.grid(row=8, column=0, columnspan=3, sticky="nsew")
-        rs.rowconfigure(8, weight=1, minsize=120)
+        self.txt_restore_log._frame.grid(row=9, column=0, columnspan=3, sticky="nsew")
+        rs.rowconfigure(9, weight=1, minsize=120)
         rs.columnconfigure(1, weight=1)
         self.ui_restore = SimpleNamespace(bar=self.restore_bar, status=self.v_restore_status, log=self.txt_restore_log,
                                           cancel=self.btn_restore_cancel, actions=[self.btn_restore], done=self._restore_done)
@@ -528,6 +581,7 @@ class App(tk.Tk):
         if folder:
             found = find_backups(folder)
             self.v_backup.set(os.path.normpath(found[0] if found else folder))
+            self._update_backup_hint()
 
     def on_rx_toggle(self) -> None:
         if self.rx is not None:
@@ -581,12 +635,30 @@ class App(tk.Tk):
                 elif kind == "done":
                     self._log(self.txt_rx_log, f"Terminé : {e['files']} fichier(s), {human_size(e['bytes'])} dans {e['root']}")
                     self.v_backup.set(e["root"])
+                    self._update_backup_hint()
                     messagebox.showinfo("Réception terminée", f"{e['files']} fichier(s) reçus dans\n{e['root']}\n\nVous pouvez lancer « Restaurer ».")
                 if kind in ("done", "stopped"):
                     self._rx_stop()
         except queue.Empty:
             pass
         self._rx_poll_id = self.after(150, self._poll_receiver)
+
+    def _update_backup_hint(self) -> None:
+        """Indique de quel compte vient la sauvegarde et préselectionne le profil du même nom s'il existe ici."""
+        self.v_backup_hint.set("")
+        path = self.v_backup.get().strip().strip('"')
+        try:
+            manifest = transfer.load_manifest(path)
+        except (OSError, ValueError, KeyError):
+            return
+        user, machine = manifest.get("user", ""), manifest.get("machine", "")
+        if not user:
+            return
+        same = next((p for p in self._profiles if p["name"].lower() == user.lower()), None)
+        if same:
+            self.v_target_profile.set(profile_label(same))
+        self.v_backup_hint.set(f"Sauvegarde du compte « {user} » ({machine})." + (
+            "" if same else " Aucun profil de ce nom ici : choisissez le compte de destination."))
 
     def on_restore(self) -> None:
         backup = self.v_backup.get().strip().strip('"')
@@ -599,8 +671,15 @@ class App(tk.Tk):
                 return messagebox.showwarning("swap", "Indiquez le dossier de la sauvegarde (celui qui contient manifest.json).")
         dry, over = self.v_restore_dry.get(), self.v_overwrite.get()
         rules = self.txt_restore_rules.get("1.0", "end")
-        if not dry and not messagebox.askokcancel("Restaurer ?", "Fermez d'abord Outlook, les navigateurs et VS Code.\n\n"
-                                                   "Les fichiers déjà présents sur ce PC ne sont " + ("PAS conservés (écrasés)." if over else "jamais écrasés.")):
+        self.session.target_home = self._chosen_home(self.v_target_profile)
+        prof = self._chosen_profile(self.v_target_profile)
+        where = f"le profil « {prof['name']} »" if prof else "le compte connecté"
+        other = "" if not self.session.target_home else (
+            "\n\nCe n'est pas le compte connecté : le registre (réglages de certaines applications) ne sera pas importé. "
+            "Ouvrez une session avec ce compte et relancez pour les appliquer.")
+        if not dry and not messagebox.askokcancel("Restaurer ?", f"Restauration dans {where}.\n"
+                                                   "Fermez d'abord Outlook, les navigateurs et VS Code (sur ce compte).\n\n"
+                                                   "Les fichiers déjà présents sont " + ("PAS conservés (écrasés)." if over else "jamais écrasés.") + other):
             return
         self._set_text(self.txt_restore_log, "")
         def work(ctx):

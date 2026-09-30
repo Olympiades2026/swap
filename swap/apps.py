@@ -45,7 +45,7 @@ def _read_uninstall(hive, view, scope: str) -> list:
     return apps
 
 
-def installed_apps() -> list:
+def installed_apps(current_user: bool = True) -> list:
     if not is_windows():
         return []
     import winreg
@@ -53,7 +53,8 @@ def installed_apps() -> list:
     apps = []
     apps += _read_uninstall(winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_64KEY, "machine")
     apps += _read_uninstall(winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_32KEY, "machine")
-    apps += _read_uninstall(winreg.HKEY_CURRENT_USER, 0, "utilisateur")
+    if current_user:  # les applications installées « pour l'utilisateur » d'un autre compte ne sont pas visibles d'ici
+        apps += _read_uninstall(winreg.HKEY_CURRENT_USER, 0, "utilisateur")
     seen, unique = set(), []
     for app in apps:
         ident = (app["name"].lower(), app["version"])

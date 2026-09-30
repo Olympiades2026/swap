@@ -10,7 +10,7 @@ import sys
 
 from . import __version__, transfer
 from .sink import LocalSink, SinkError
-from .locations import Locations
+from .locations import Locations, find_profile, list_profiles, profile_label
 from .model import Item
 from .redirects import load_rules_file, parse_rules
 from .publish import INVENTORY, RULES_FILE, publish_extras, write_outputs
@@ -39,9 +39,33 @@ def _rules(args) -> list:
     return rules + load_rules_file(path)
 
 
+def _profile_loc(user) -> Locations:
+    """Emplacements du profil demandé (--user), ou du compte connecté."""
+    if not user:
+        return Locations.detect()
+    try:
+        return Locations.for_profile(find_profile(user))
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+
+
+def cmd_profiles(args) -> int:
+    profiles = list_profiles()
+    if not profiles:
+        print("Aucun profil utilisateur trouvé.")
+        return 1
+    print("Profils utilisateur de ce poste (à utiliser avec --user) :")
+    for p in profiles:
+        print(f"  {profile_label(p):50} {p['path']}")
+    return 0
+
+
 def cmd_scan(args) -> int:
-    print("Analyse du poste (peut durer quelques minutes selon la quantité de fichiers)...")
-    inv = run_scan(progress=_progress, with_system=not args.no_system)
+    loc = _profile_loc(getattr(args, "user", None))
+    print(f"Analyse du poste, profil « {loc.user} » (peut durer quelques minutes selon la quantité de fichiers)...")
+    if not loc.current:
+        print("  Profil d'un autre compte : registre, lecteurs réseau, certificats et identifiants ne seront pas lus.")
+    inv = run_scan(loc, progress=_progress, with_system=not args.no_system)
     _end_progress()
     paths = write_outputs(inv, args.out)
     items = inv["items"]
@@ -208,7 +232,9 @@ def cmd_verify(args) -> int:
 
 
 def cmd_restore(args) -> int:
-    loc = Locations.detect()
+    loc = _profile_loc(getattr(args, "user", None))
+    if not loc.current:
+        print(f"Restauration dans le profil « {loc.user} » (pas le compte connecté) : le registre ne sera pas importé.")
     if not args.dry_run:
         print("Fermez les applications concernées (Outlook, navigateurs, VS Code...) avant de restaurer leur configuration.")
     rules = parse_rules(args.map or []) + load_rules_file(args.map_file or os.path.join(args.backup, RULES_FILE))
@@ -246,7 +272,16 @@ def menu() -> int:
     print(" q) Quitter")
     choice = input("\nVotre choix : ").strip().lower()
     ns = argparse.Namespace(host=None, code=None, port=47800, dest=None, exclude=None, map=None, map_file=None, out=DEFAULT_OUT, inventory=None, no_system=False, only=None, skip=None, interactive=True, yes=False,
-                            dry_run=False, hash=False, deep=False, overwrite=False)
+                            dry_run=False, hash=False, deep=False, overwrite=False, user=None)
+    if choice in ("1", "4"):
+        profiles = list_profiles()
+        if len(profiles) > 1:
+            print("\nProfils utilisateur :")
+            for n, p in enumerate(profiles, 1):
+                print(f" {n}) {profile_label(p)}")
+            pick = input("Numéro du profil (Entrée = compte connecté) : ").strip()
+            if pick.isdigit() and 1 <= int(pick) <= len(profiles) and not profiles[int(pick) - 1]["current"]:
+                ns.user = profiles[int(pick) - 1]["name"]
     if choice == "1":
         return cmd_scan(ns)
     if choice == "2":
@@ -274,6 +309,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("scan", help="analyser ce poste et produire le rapport de ce qu'il faut migrer")
     s.add_argument("--out", default=DEFAULT_OUT, help="dossier de sortie (défaut : %(default)s)")
     s.add_argument("--no-system", action="store_true", help="ne pas lister imprimantes, tâches, certificats...")
+    s.add_argument("--user", help="analyser le profil de cet utilisateur (nom dans C:\\Users ; défaut : le compte connecté ; voir « profiles »)")
     s.set_defaults(func=cmd_scan)
 
     c = sub.add_parser("copy", help="copier les données vers un disque externe ou un partage réseau")
@@ -317,7 +353,11 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--map-file", help="fichier de règles (défaut : regles.txt de la sauvegarde)")
     r.add_argument("--overwrite", action="store_true", help="écraser les fichiers déjà présents (défaut : ne jamais écraser)")
     r.add_argument("--dry-run", action="store_true")
+    r.add_argument("--user", help="restaurer dans le profil de cet utilisateur (défaut : le compte connecté)")
     r.set_defaults(func=cmd_restore)
+
+    pr = sub.add_parser("profiles", help="lister les profils utilisateur de ce poste")
+    pr.set_defaults(func=cmd_profiles)
     return p
 
 

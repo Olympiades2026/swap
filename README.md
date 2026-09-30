@@ -14,13 +14,13 @@ Double-cliquer sur `LANCER.bat` (ou `python -m swap gui`). Rien à installer d'a
 
 En haut : **PC source** (ce poste, détecté) → **PC cible** (à saisir : `TPSEL045` ou une adresse IP).
 
-1. **Analyser** : lit ce poste et prépare la liste de tout ce qui est à migrer (rapport détaillé consultable).
+1. **Analyser** : lit ce poste et prépare la liste de tout ce qui est à migrer (rapport détaillé consultable). Une liste **« Utilisateur à migrer »** propose tous les profils de `C:\Users` (le compte connecté d'abord) : on peut donc migrer le profil d'un collègue depuis un compte administrateur. Voir « Choisir l'utilisateur » plus bas.
 2. **Choisir** : cocher / décocher les éléments, filtrer, écrire des règles de destination (« les projets PC SOFT arrivent dans `C:\Mes Projets` »), exclure des fichiers (`*.iso`).
 3. **Envoyer**, au choix :
    - **Connexion directe** vers le PC cible : sur ce PC cible, ouvrir swap → onglet 4 → *Démarrer la réception* : il affiche un **code**. Le saisir sur le PC source. Envoi chiffré, avec progression, vitesse, temps restant, **annulation et reprise**.
    - **Partage Windows** `\\TPSEL045\C$\SWAP` : rien à lancer sur le PC cible, mais il faut être administrateur dessus.
    - **Disque externe / dossier** : comme avant.
-4. **Recevoir / restaurer (sur le PC cible)** : *Restaurer* remet tout en place (sans écraser), puis *Lancer le script d'installation* réinstalle les applications et recrée lecteurs réseau et imprimantes. Le dossier reçu contient aussi `RESTAURER.bat`, qui ouvre directement cet écran.
+4. **Recevoir / restaurer (sur le PC cible)** : la liste **« Restaurer dans le profil »** choisit le compte de destination (par défaut celui de la sauvegarde s'il existe sur ce PC). *Restaurer* remet tout en place (sans écraser), puis *Lancer le script d'installation* réinstalle les applications et recrée lecteurs réseau et imprimantes. Le dossier reçu contient aussi `RESTAURER.bat`, qui ouvre directement cet écran.
 
 Le PC cible a besoin de l'outil (le même dossier `swap`, à copier une fois) et de Python pour recevoir en connexion directe. Avec le mode « partage Windows », c'est `RESTAURER.bat` (qui embarque l'outil) qui suffit, mais Python reste nécessaire pour l'exécuter.
 
@@ -29,6 +29,13 @@ Le PC cible a besoin de l'outil (le même dossier `swap`, à copier une fois) et
 - Le code affiché (10 caractères) authentifie les deux PC et sert à chiffrer la connexion : sans lui, personne ne peut envoyer ni lire de données. Les échanges sont chiffrés et signés (SHAKE-256 + HMAC-SHA256, bibliothèque standard uniquement). Cette construction **n'a pas été auditée** : elle convient pour un réseau interne, pas pour Internet.
 - Le port TCP **47800** doit être autorisé en entrée sur le PC cible (profil Domaine). La case « Ouvrir ce port dans le pare-feu » le fait pour vous si vous avez les droits administrateur, et le referme ensuite. Si votre entreprise filtre les flux entre postes, utilisez le partage Windows ou un disque.
 - Équivalent en ligne de commande : `python -m swap receive --dest C:\SWAP --firewall` (cible), puis `python -m swap copy --host TPSEL045 --code XXXXX-XXXXX` (source).
+
+### Choisir l'utilisateur
+
+- **Analyse** : `python -m swap profiles` liste les profils ; `python -m swap scan --user jdupont` analyse celui de `jdupont`. Les dossiers (Bureau, Documents… y compris ceux redirigés vers OneDrive) et la configuration des applications du profil sont lus. Il faut être **administrateur** pour lire le profil d'un autre compte.
+- **Limite** : ce qui vit dans la *session* de l'utilisateur n'est lisible que connecté avec son compte : clés de registre (PuTTY, WinSCP, ODBC…), lecteurs réseau, variables d'environnement, certificats personnels, identifiants Windows, applications installées « pour l'utilisateur ». Le rapport le signale quand on analyse un autre compte ; pour tout avoir, lancer l'analyse connecté avec ce compte.
+- **Restauration** : `python -m swap restore --backup … --user jdupont` remet tout dans le profil de `jdupont` (Bureau, Documents, AppData…), même si le nom du compte est différent de celui d'origine. Les réglages du registre ne sont importés que pour le compte connecté : ils sont signalés, à relancer connecté avec le compte de destination.
+- Le menu texte (`python -m swap` sans interface graphique) propose aussi de choisir le profil.
 
 ## Utilisation rapide : ligne de commande
 

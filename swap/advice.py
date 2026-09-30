@@ -86,5 +86,13 @@ def compute_advice(inv: dict) -> list:
     if inv.get("meta", {}).get("windows") and inv.get("apps") and not inv.get("winget_available"):
         advice.append({"level": "info", "text": "winget n'est pas disponible sur ce poste : la liste des applications est à réinstaller à la main."})
 
+    meta = inv.get("meta", {})
+    if meta.get("profile_current") is False:
+        advice.append({"level": "important", "text": (
+            f"Analyse du profil « {meta.get('user', '?')} » faite depuis un autre compte : les fichiers et la configuration des "
+            "applications sont bien listés, mais tout ce qui vit dans la session de cet utilisateur (clés de registre, lecteurs réseau, "
+            "variables d'environnement, certificats personnels, identifiants Windows, applications installées « pour l'utilisateur ») "
+            "n'est pas lisible d'ici. Pour l'inclure, refaites l'analyse en étant connecté avec ce compte.")})
+
     advice.sort(key=lambda a: ORDER[a["level"]])
     return advice

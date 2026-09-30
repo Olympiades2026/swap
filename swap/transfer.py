@@ -248,7 +248,12 @@ def run_restore(backup: str, loc: Locations, *, only=(), skip=(), overwrite=Fals
         data = os.path.join(backup, "data", item.id)
         if item.kind == "registry":
             reg = os.path.join(data, "export.reg")
-            if os.path.exists(reg) and is_windows() and not dry_run:
+            if not getattr(loc, "current", True):
+                if os.path.exists(reg):
+                    res["errors"].append(
+                        f"{item.label} : le registre ne peut être importé que pour le compte connecté. Ouvrez une session avec le "
+                        f"compte « {loc.user} » et relancez la restauration (les fichiers déjà en place sont conservés).")
+            elif os.path.exists(reg) and is_windows() and not dry_run:
                 proc = subprocess.run(["reg", "import", reg], capture_output=True, stdin=subprocess.DEVNULL)
                 if proc.returncode == 0:
                     res["restored"] = 1

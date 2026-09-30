@@ -11,7 +11,7 @@ import traceback
 from typing import Callable, Optional
 
 from . import net, transfer
-from .locations import Locations
+from .locations import Locations, list_profiles
 from .model import Item
 from .publish import INVENTORY, RULES_FILE, publish_extras, write_outputs
 from .redirects import load_rules_file, parse_rules
@@ -89,7 +89,20 @@ class Session:
         self.rules_text = ""
         self.exclude_text = ""
         self.last_backup = ""
+        self.profiles_base = ""  # dossier contenant les profils (défaut : C:\Users)
+        self.source_home = ""  # profil à analyser (vide = compte connecté)
+        self.target_home = ""  # profil dans lequel restaurer (vide = compte connecté)
         self.load_rules_text()
+
+    # -- profils utilisateur --------------------------------------------------------------------------------------
+    def profiles(self) -> list:
+        return list_profiles(self.profiles_base)
+
+    def source_loc(self) -> Locations:
+        return Locations.for_profile(self.source_home) if self.source_home else (self.loc or Locations.detect())
+
+    def target_loc(self) -> Locations:
+        return Locations.for_profile(self.target_home) if self.target_home else (self.loc or Locations.detect())
 
     # -- règles ---------------------------------------------------------------------------------------------------
     def load_rules_text(self) -> None:
@@ -118,7 +131,7 @@ class Session:
             self.set_inventory(json.load(fh))
 
     def scan(self, ctx: JobContext) -> dict:
-        inv = run_scan(self.loc, progress=ctx.progress)
+        inv = run_scan(self.source_loc(), progress=ctx.progress)
         ctx.progress("Écriture du rapport...")
         write_outputs(inv, self.out_dir)
         self.set_inventory(inv)
@@ -222,7 +235,7 @@ class Session:
         ctx.total_bytes = sum(s.get("bytes", 0) for s in manifest.get("stats", {}).values())
         ctx.done_bytes = 0
         extra = parse_rules(rules_text.splitlines()) + load_rules_file(os.path.join(backup, RULES_FILE))
-        return transfer.run_restore(backup, self.loc or Locations.detect(), overwrite=overwrite, dry_run=dry_run,
+        return transfer.run_restore(backup, self.target_loc(), overwrite=overwrite, dry_run=dry_run,
                                     rules=extra, on_chunk=ctx.on_chunk)
 
 

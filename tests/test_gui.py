@@ -301,6 +301,77 @@ class GuiTests(unittest.TestCase):
         finally:
             app2.destroy()
 
+    def _users(self):
+        base = os.path.join(self.tmp.name, "Users")
+        write(os.path.join(base, "alice", "Documents", "contrat.docx"), "contrat")
+        write(os.path.join(base, "bob", "Documents", "bob.txt"), "bob")
+        self.session.profiles_base = base
+        self.app._refresh_profiles()
+        return base
+
+    def _label(self, name):
+        return next(v for v in self.app.cmb_source["values"] if v.startswith(name + " "))
+
+    def test_user_pickers_list_profiles_and_default_to_connected_account(self):
+        self._users()
+        values = list(self.app.cmb_source["values"])
+        self.assertEqual(len(values), 3)                              # compte connecté + alice + bob
+        self.assertIn("compte connecté", values[0])
+        self.assertEqual(self.app.v_source_profile.get(), values[0])
+        self.assertEqual(self.session.source_home, "")
+        self.assertEqual(self.app.v_profile_note.get(), "")
+        self.assertEqual(list(self.app.cmb_target["values"]), values)
+
+    def test_scan_of_chosen_user(self):
+        base = self._users()
+        self.app.v_source_profile.set(self._label("alice"))
+        self.app.cmb_source.event_generate("<<ComboboxSelected>>")
+        self.app.update()
+        self.assertEqual(self.session.source_home, os.path.join(base, "alice"))
+        self.assertIn("alice", self.app.v_profile_note.get())
+        self.app.on_scan()
+        wait_job(self.app)
+        self.assertIsNone(self.app.job.error, self.app.job.trace)
+        self.assertEqual(self.session.inv["meta"]["user"], "alice")
+        self.assertIn("alice", self.app.lbl_source.cget("text"))
+        self.assertIn("autre compte", self.app.txt_summary.get("1.0", "end"))
+        self.assertEqual([i.id for i in self.session.items if i.id == "dossier-documents"], ["dossier-documents"])
+
+    def test_restore_into_chosen_user_and_backup_hint(self):
+        from swap import transfer
+        from swap.model import Item
+        from swap.scan import run_scan
+
+        base = self._users()
+        inv = run_scan(self.loc)
+        inv["meta"]["user"] = "bob"
+        items = [Item.from_dict(d) for d in inv["items"] if d["id"] == "dossier-documents"]
+        backup = transfer.run_backup(items, inv, os.path.join(self.tmp.name, "usb"))["backup"]
+        self.app.v_backup.set(backup)
+        self.app._update_backup_hint()
+        self.assertIn("bob", self.app.v_backup_hint.get())
+        self.assertTrue(self.app.v_target_profile.get().startswith("bob "))   # profil du même nom présélectionné
+        self.app.v_target_profile.set(self._label("alice"))
+        self.app.on_restore()
+        wait_job(self.app)
+        self.assertIsNone(self.app.job.error, self.app.job.trace)
+        self.assertEqual(read(os.path.join(base, "alice", "Documents", "rapport.docx")), "rapport")
+        self.assertIn("alice", self.ask.call_args[0][1])                      # la confirmation nomme le profil de destination
+        self.assertIn("registre", self.ask.call_args[0][1])                   # et prévient pour le registre
+        self.assertFalse(os.path.exists(os.path.join(base, "bob", "Documents", "rapport.docx")))
+
+    def test_backup_hint_without_matching_profile(self):
+        from swap import transfer
+        from swap.scan import run_scan
+
+        self._users()
+        inv = run_scan(self.loc)
+        inv["meta"]["user"] = "zoe"
+        backup = transfer.run_backup([], inv, os.path.join(self.tmp.name, "usb"))["backup"]
+        self.app.v_backup.set(backup)
+        self.app._update_backup_hint()
+        self.assertIn("Aucun profil de ce nom", self.app.v_backup_hint.get())
+
     def test_error_in_a_tk_callback_is_shown_not_swallowed(self):
         try:
             raise ValueError("boum")

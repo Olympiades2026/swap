@@ -172,7 +172,7 @@ class _Scanner:
                 self.add(f"config-{cfg.id}{suffix}", cfg.label, "dir" if os.path.isdir(path) else "file", path,
                          target, "Configuration des applications", cache=cfg.cache,
                          extra=cfg.extra_excludes, default=cfg.default, sensitive=cfg.sensitive, note=cfg.note)
-            if is_windows():
+            if is_windows() and self.loc.current:  # le registre lu est celui du compte connecté
                 for j, key in enumerate(cfg.registry):
                     if _registry_key_exists(key):
                         self.items.append(Item(
@@ -338,7 +338,7 @@ def run_scan(loc: Optional[Locations] = None, progress: Optional[Callable[[str],
     loc = loc or Locations.detect()
     if progress:
         progress("Applications installées...")
-    app_list = apps.installed_apps()
+    app_list = apps.installed_apps(current_user=loc.current)
     scanner = _Scanner(loc, progress, app_tokens(app_list))
     scanner.known_folders()
     scanner.home_extras()
@@ -354,7 +354,7 @@ def run_scan(loc: Optional[Locations] = None, progress: Optional[Callable[[str],
         app["winget_id"] = winget.get(app["name"], "")
         app["winget_guess"] = "" if app["winget_id"] or app.get("component") else apps.guess_winget(app["name"])
 
-    sysinfo = system.collect_all(loc.appdata) if with_system and is_windows() else {}
+    sysinfo = system.collect_all(loc.appdata, loc.current) if with_system and is_windows() else {}
     installer_info = collect_installers(scanner, app_list, sysinfo)
 
     sink = scanner.sink
@@ -372,11 +372,12 @@ def run_scan(loc: Optional[Locations] = None, progress: Optional[Callable[[str],
             "tool_version": __version__,
             "date": datetime.now().isoformat(timespec="seconds"),
             "machine": platform.node(),
-            "user": os.environ.get("USERNAME") or os.environ.get("USER") or "",
-            "domain": os.environ.get("USERDOMAIN", ""),
+            "user": (os.environ.get("USERNAME") or os.environ.get("USER") or "") if loc.current else loc.user,
+            "domain": os.environ.get("USERDOMAIN", "") if loc.current else "",
             "os": platform.platform(),
             "windows": is_windows(),
             "home": loc.home,
+            "profile_current": loc.current,
         },
         "items": [it.to_dict() for it in scanner.items],
         "apps": app_list,
