@@ -9,17 +9,15 @@ import shutil
 import sys
 
 from . import __version__, transfer
+from .sink import LocalSink, SinkError
 from .locations import Locations
 from .model import Item
-from .redirects import TEMPLATE, load_rules_file, parse_rules
-from .report import build_report
+from .redirects import load_rules_file, parse_rules
+from .publish import INVENTORY, RULES_FILE, publish_extras, write_outputs
 from .scan import run_scan
-from .scripts import build_setup_script
 from .util import human_size
 
 DEFAULT_OUT = "swap-sortie"
-INVENTORY = "inventaire.json"
-RULES_FILE = "regles.txt"
 
 
 def _progress(msg: str) -> None:
@@ -32,30 +30,6 @@ def _progress(msg: str) -> None:
 def _end_progress() -> None:
     if sys.stderr.isatty():
         sys.stderr.write("\r" + " " * (shutil.get_terminal_size((100, 20)).columns - 1) + "\r")
-
-
-def write_outputs(inv: dict, out_dir: str) -> dict:
-    os.makedirs(out_dir, exist_ok=True)
-    report = build_report(inv)
-    paths = {
-        "inventaire": os.path.join(out_dir, INVENTORY),
-        "rapport_html": os.path.join(out_dir, "rapport.html"),
-        "rapport_md": os.path.join(out_dir, "rapport.md"),
-        "script": os.path.join(out_dir, "installer_et_configurer.ps1"),
-        "regles": os.path.join(out_dir, RULES_FILE),
-    }
-    with open(paths["inventaire"], "w", encoding="utf-8") as fh:
-        json.dump(inv, fh, ensure_ascii=False, indent=1)
-    with open(paths["rapport_html"], "w", encoding="utf-8") as fh:
-        fh.write(report.html())
-    with open(paths["rapport_md"], "w", encoding="utf-8") as fh:
-        fh.write(report.md())
-    with open(paths["script"], "w", encoding="utf-8-sig", newline="") as fh:  # BOM : PowerShell 5 lit bien les accents
-        fh.write(build_setup_script(inv))
-    if not os.path.exists(paths["regles"]):  # ne jamais écraser les règles déjà écrites par l'utilisateur
-        with open(paths["regles"], "w", encoding="utf-8-sig", newline="") as fh:
-            fh.write(TEMPLATE)
-    return paths
 
 
 def _rules(args) -> list:
@@ -97,16 +71,17 @@ def _load_or_scan(args) -> dict:
     return inv
 
 
-def _install_tool(backup: str) -> None:
-    """Dépose l'outil et un lanceur dans la sauvegarde : le nouveau poste n'a besoin que de Python."""
-    tool_dir = os.path.join(backup, "outil")
-    shutil.rmtree(tool_dir, ignore_errors=True)
-    shutil.copytree(os.path.dirname(os.path.abspath(__file__)), os.path.join(tool_dir, "swap"),
-                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    with open(os.path.join(backup, "RESTAURER.bat"), "w", encoding="cp1252", newline="") as fh:
-        fh.write('@echo off\r\ncd /d "%~dp0outil"\r\nwhere py >nul 2>&1\r\n'
-                 'if %errorlevel%==0 (py -3 -m swap restore --backup "%~dp0." -i) else (python -m swap restore --backup "%~dp0." -i)\r\n'
-                 "pause\r\n")
+def _make_sink(args, inv):
+    """Destination : PC distant en connexion directe (--host/--code) ou dossier (--dest)."""
+    if args.host:
+        from .net import NetSink
+
+        if not args.code:
+            raise SystemExit("--code est obligatoire avec --host (le code affiché sur le PC cible).")
+        return NetSink(args.host, args.code, args.port, inv["meta"]["machine"], inv["meta"]["user"])
+    if not args.dest:
+        raise SystemExit("Indiquez --dest (dossier) ou --host et --code (PC cible).")
+    return LocalSink(transfer.backup_dir_for(args.dest, inv["meta"]["machine"]))
 
 
 def cmd_copy(args) -> int:
@@ -116,8 +91,20 @@ def cmd_copy(args) -> int:
     if not chosen:
         print("Rien à copier.")
         return 1
-    need, free = transfer.check_space(chosen, args.dest)
-    print(f"\n{len(chosen)} élément(s) à copier, {human_size(need)} → {args.dest}")
+    try:
+        sink = _make_sink(args, inv)
+    except SinkError as exc:
+        print(f"\n{exc}")
+        return 2
+    try:
+        return _copy_to(args, inv, chosen, sink)
+    finally:
+        sink.close()
+
+
+def _copy_to(args, inv, chosen, sink) -> int:
+    need, free = transfer.check_space(chosen, args.dest) if not args.host else (sum(i.size for i in chosen), -1)
+    print(f"\n{len(chosen)} élément(s) à copier, {human_size(need)} → {sink.describe()}")
     if 0 <= free < need:
         print(f"ATTENTION : seulement {human_size(free)} libres sur la destination.")
         if not args.yes and not args.dry_run and input("Continuer quand même ? [o/N] ").strip().lower() not in ("o", "oui", "y"):
@@ -131,8 +118,13 @@ def cmd_copy(args) -> int:
         print("Règles de destination enregistrées avec la sauvegarde :")
         for pattern, dest in rules:
             print(f"  {pattern}  →  {dest}")
-    summary = transfer.run_backup(chosen, inv, args.dest, dry_run=args.dry_run, want_hash=args.hash, progress=_progress,
-                                  redirects=rules, exclude_files=args.exclude or ())
+    try:
+        summary = transfer.run_backup(chosen, inv, sink=sink, dry_run=args.dry_run, want_hash=args.hash, progress=_progress,
+                                      redirects=rules, exclude_files=args.exclude or ())
+    except SinkError as exc:
+        _end_progress()
+        print(f"\nTransfert interrompu : {exc}\nRelancez la même commande : seuls les fichiers manquants seront renvoyés.")
+        return 2
     _end_progress()
     for item in chosen:
         r = summary["items"][item.id]
@@ -141,14 +133,63 @@ def cmd_copy(args) -> int:
     if args.dry_run:
         print("\n(simulation : rien n'a été écrit)")
         return 0
-    write_outputs(inv, summary["backup"])
-    _install_tool(summary["backup"])
+    publish_extras(inv, sink)
     print(f"\nSauvegarde : {summary['backup']}")
     if summary["errors"]:
         print(f"{len(summary['errors'])} fichier(s) non copié(s) (verrouillés ou inaccessibles) : voir erreurs.log")
         print("Astuce : fermez Outlook/les applications concernées et relancez la même commande, seuls les fichiers manquants seront recopiés.")
     print("Sur le nouveau poste : lancez RESTAURER.bat depuis ce dossier.")
     return 0 if not summary["errors"] else 2
+
+
+def cmd_receive(args) -> int:
+    """PC cible : attend l'envoi d'un autre PC (connexion directe chiffrée, protégée par un code)."""
+    from . import net
+
+    state = {"last": 0.0}
+
+    def on_event(e):
+        kind = e["kind"]
+        if kind == "connected":
+            print(f"\nConnexion de {e['machine']} ({e['peer']}), utilisateur {e['user']} → {e['root']}")
+        elif kind == "file":
+            import time
+
+            if time.monotonic() - state["last"] > 0.5:
+                state["last"] = time.monotonic()
+                _progress(f"{e['files']} fichiers, {human_size(e['bytes'])} reçus")
+        elif kind == "done":
+            _end_progress()
+            print(f"Terminé : {e['files']} fichier(s), {human_size(e['bytes'])} dans {e['root']}")
+        elif kind in ("refused", "aborted"):
+            _end_progress()
+            print(f"{'Connexion refusée' if kind == 'refused' else 'Transfert interrompu'} ({e['peer']}) : {e['error']}")
+
+    rx = net.Receiver(args.dest, args.code, args.port, on_event)
+    print(f"Ce PC : {socket_name()}  —  adresses : {', '.join(net.local_addresses()) or '?'}")
+    print(f"Code à saisir sur le PC source : {rx.code}   (port {rx.port})")
+    if args.firewall:
+        ok, msg = net.firewall_open(rx.port)
+        print("Pare-feu : port ouvert." if ok else f"Pare-feu : impossible de l'ouvrir ({msg}). Lancez en administrateur ou ouvrez le port TCP {rx.port}.")
+    print(f"Réception dans : {args.dest}   (Ctrl+C pour arrêter)")
+    try:
+        rx.serve(once=not args.keep)
+    except KeyboardInterrupt:
+        rx.stop()
+        print("\nRéception arrêtée.")
+    finally:
+        if args.firewall:
+            net.firewall_close(rx.port)
+    root = rx.root
+    if root:
+        print(f"\nSur ce PC, restaurez avec : python -m swap restore --backup \"{root}\"   (ou RESTAURER.bat dans ce dossier)")
+    return 0
+
+
+def socket_name() -> str:
+    import socket
+
+    return socket.gethostname()
 
 
 def cmd_verify(args) -> int:
@@ -187,6 +228,15 @@ def cmd_restore(args) -> int:
     return 0 if not res["errors"] else 2
 
 
+def cmd_gui(args) -> int:
+    try:
+        from .gui import run
+    except ImportError as exc:  # tkinter absent (Python installé sans Tcl/Tk)
+        print(f"Interface graphique indisponible ({exc}). Utilisez la ligne de commande : python -m swap --help")
+        return 1
+    return run(args.out, getattr(args, "backup", None))
+
+
 def menu() -> int:
     print(f"swap {__version__} — assistant de migration de poste\n")
     print(" 1) Analyser CE poste et produire le rapport de migration")
@@ -195,7 +245,7 @@ def menu() -> int:
     print(" 4) Restaurer sur le NOUVEAU poste")
     print(" q) Quitter")
     choice = input("\nVotre choix : ").strip().lower()
-    ns = argparse.Namespace(exclude=None, map=None, map_file=None, out=DEFAULT_OUT, inventory=None, no_system=False, only=None, skip=None, interactive=True, yes=False,
+    ns = argparse.Namespace(host=None, code=None, port=47800, dest=None, exclude=None, map=None, map_file=None, out=DEFAULT_OUT, inventory=None, no_system=False, only=None, skip=None, interactive=True, yes=False,
                             dry_run=False, hash=False, deep=False, overwrite=False)
     if choice == "1":
         return cmd_scan(ns)
@@ -216,13 +266,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"swap {__version__}")
     sub = p.add_subparsers(dest="cmd")
 
+    g = sub.add_parser("gui", help="ouvrir l'interface graphique")
+    g.add_argument("--out", default=os.path.abspath(DEFAULT_OUT), help="dossier de sortie (défaut : %(default)s)")
+    g.add_argument("--backup", help="ouvrir directement la restauration de cette sauvegarde (utilisé par RESTAURER.bat)")
+    g.set_defaults(func=cmd_gui)
+
     s = sub.add_parser("scan", help="analyser ce poste et produire le rapport de ce qu'il faut migrer")
     s.add_argument("--out", default=DEFAULT_OUT, help="dossier de sortie (défaut : %(default)s)")
     s.add_argument("--no-system", action="store_true", help="ne pas lister imprimantes, tâches, certificats...")
     s.set_defaults(func=cmd_scan)
 
     c = sub.add_parser("copy", help="copier les données vers un disque externe ou un partage réseau")
-    c.add_argument("--dest", required=True, help="dossier de destination")
+    c.add_argument("--dest", help="dossier de destination (disque externe, partage \\\\serveur\\partage...)")
+    c.add_argument("--host", help="nom ou adresse du PC cible (connexion directe ; il doit être en mode réception)")
+    c.add_argument("--code", help="code affiché par le PC cible en mode réception")
+    c.add_argument("--port", type=int, default=47800, help="port de la connexion directe (défaut : %(default)s)")
     c.add_argument("--out", default=DEFAULT_OUT, help="dossier contenant l'inventaire du scan")
     c.add_argument("--inventory", help="fichier inventaire.json (défaut : celui du scan)")
     c.add_argument("--only", nargs="+", help="ne copier que les éléments dont le nom contient ces mots")
@@ -236,6 +294,14 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--dry-run", action="store_true", help="simuler sans rien écrire")
     c.add_argument("-y", "--yes", action="store_true", help="ne pas poser de question")
     c.set_defaults(func=cmd_copy)
+
+    rc = sub.add_parser("receive", help="PC cible : recevoir la copie d'un autre PC par le réseau (affiche un code)")
+    rc.add_argument("--dest", default="C:\\SWAP", help="dossier où ranger ce qui est reçu (défaut : %(default)s)")
+    rc.add_argument("--port", type=int, default=47800)
+    rc.add_argument("--code", help="code imposé (sinon un code aléatoire est généré)")
+    rc.add_argument("--firewall", action="store_true", help="ouvrir le port dans le pare-feu Windows pendant la réception (administrateur)")
+    rc.add_argument("--keep", action="store_true", help="rester en écoute après un premier envoi réussi")
+    rc.set_defaults(func=cmd_receive)
 
     v = sub.add_parser("verify", help="vérifier qu'une sauvegarde est complète")
     v.add_argument("--backup", required=True, help="dossier SWAP-<poste> de la sauvegarde")
@@ -255,11 +321,24 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _gui_possible() -> bool:
+    """Interface graphique par défaut sous Windows (ou si un écran est disponible) quand tkinter est installé."""
+    if os.name != "nt" and not os.environ.get("DISPLAY"):
+        return False
+    try:
+        import tkinter  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
         if not args.cmd:
+            if _gui_possible():
+                return cmd_gui(argparse.Namespace(out=os.path.abspath(DEFAULT_OUT)))
             return menu() if sys.stdin.isatty() else (parser.print_help() or 0)
         return args.func(args)
     except KeyboardInterrupt:

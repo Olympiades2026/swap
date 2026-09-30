@@ -8,15 +8,29 @@ Outil en Python (aucune dépendance, juste Python 3.9+) pour renouveler un poste
 
 > Pourquoi Python et pas PHP ? Il faut lire le registre Windows, la liste des logiciels, les imprimantes… PHP n'est pas fait pour ça, Python si.
 
-## Utilisation rapide
+## Utilisation rapide : l'interface graphique
 
-Sur l'**ancien** poste (Python installé) :
+Double-cliquer sur `LANCER.bat` (ou `python -m swap gui`). Rien à installer d'autre que Python 3.9+ (tkinter est fourni avec l'installateur de python.org).
 
-```
-LANCER.bat
-```
+En haut : **PC source** (ce poste, détecté) → **PC cible** (à saisir : `TPSEL045` ou une adresse IP).
 
-ou en ligne de commande :
+1. **Analyser** : lit ce poste et prépare la liste de tout ce qui est à migrer (rapport détaillé consultable).
+2. **Choisir** : cocher / décocher les éléments, filtrer, écrire des règles de destination (« les projets PC SOFT arrivent dans `C:\Mes Projets` »), exclure des fichiers (`*.iso`).
+3. **Envoyer**, au choix :
+   - **Connexion directe** vers le PC cible : sur ce PC cible, ouvrir swap → onglet 4 → *Démarrer la réception* : il affiche un **code**. Le saisir sur le PC source. Envoi chiffré, avec progression, vitesse, temps restant, **annulation et reprise**.
+   - **Partage Windows** `\\TPSEL045\C$\SWAP` : rien à lancer sur le PC cible, mais il faut être administrateur dessus.
+   - **Disque externe / dossier** : comme avant.
+4. **Recevoir / restaurer (sur le PC cible)** : *Restaurer* remet tout en place (sans écraser), puis *Lancer le script d'installation* réinstalle les applications et recrée lecteurs réseau et imprimantes. Le dossier reçu contient aussi `RESTAURER.bat`, qui ouvre directement cet écran.
+
+Le PC cible a besoin de l'outil (le même dossier `swap`, à copier une fois) et de Python pour recevoir en connexion directe. Avec le mode « partage Windows », c'est `RESTAURER.bat` (qui embarque l'outil) qui suffit, mais Python reste nécessaire pour l'exécuter.
+
+### Connexion directe : sécurité et réseau
+
+- Le code affiché (10 caractères) authentifie les deux PC et sert à chiffrer la connexion : sans lui, personne ne peut envoyer ni lire de données. Les échanges sont chiffrés et signés (SHAKE-256 + HMAC-SHA256, bibliothèque standard uniquement). Cette construction **n'a pas été auditée** : elle convient pour un réseau interne, pas pour Internet.
+- Le port TCP **47800** doit être autorisé en entrée sur le PC cible (profil Domaine). La case « Ouvrir ce port dans le pare-feu » le fait pour vous si vous avez les droits administrateur, et le referme ensuite. Si votre entreprise filtre les flux entre postes, utilisez le partage Windows ou un disque.
+- Équivalent en ligne de commande : `python -m swap receive --dest C:\SWAP --firewall` (cible), puis `python -m swap copy --host TPSEL045 --code XXXXX-XXXXX` (source).
+
+## Utilisation rapide : ligne de commande
 
 ```
 python -m swap scan                                   # 1. analyse -> swap-sortie\rapport.html
@@ -97,6 +111,7 @@ Remet chaque élément à sa place **sur le nouveau poste**, même si le nom d'u
 
 ```
 python -m unittest discover -s tests
+# avec l'interface (Linux sans écran) : xvfb-run -a python3 -m unittest discover -s tests
 ```
 
 Le code d'inventaire est principalement pensé pour Windows ; sous Linux/macOS il analyse les dossiers et la copie/restauration fonctionne, mais pas les applications ni la configuration système.
@@ -108,3 +123,5 @@ Le code d'inventaire est principalement pensé pour Windows ; sous Linux/macOS i
 | `swap/apps.py`, `swap/system.py` | applis installées, winget, imprimantes, lecteurs, certificats… |
 | `swap/transfer.py` | copie, vérification, restauration |
 | `swap/report.py`, `swap/scripts.py` | rapport HTML/MD et script PowerShell |
+| `swap/sink.py`, `swap/net.py` | destinations de copie : dossier/partage, ou PC distant (TCP chiffré) |
+| `swap/session.py`, `swap/gui.py` | logique et fenêtres de l'interface graphique |
