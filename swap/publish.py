@@ -16,7 +16,7 @@ RESTORE_BAT = (
     "@echo off\r\n"
     'cd /d "%~dp0outil"\r\n'
     "where pyw >nul 2>&1\r\n"
-    'if %errorlevel%==0 (start "" pyw -3 -m swap gui --backup "%~dp0." & exit /b)\r\n'
+    'if %errorlevel%==0 (start "" pyw -3 -m swap web --backup "%~dp0." & exit /b)\r\n'
     "where python >nul 2>&1\r\n"
     'if %errorlevel%==0 (python -m swap restore --backup "%~dp0." -i & pause & exit /b)\r\n'
     "echo Python 3.9 ou plus recent est necessaire : https://www.python.org/downloads/\r\n"

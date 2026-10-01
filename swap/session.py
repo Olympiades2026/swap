@@ -74,6 +74,17 @@ class Job(threading.Thread):
         self.ctx.cancel_event.set()
 
 
+CATEGORY_ORDER = ["Dossiers personnels", "PC SOFT", "Installateurs", "Dossiers hors profil", "Autres disques", "Configuration"]
+
+
+def category_rank(category: str) -> int:
+    """Ordre d'affichage : ce qui compte le plus pour l'utilisateur d'abord, la configuration des applis en dernier."""
+    for rank, prefix in enumerate(CATEGORY_ORDER):
+        if category.startswith(prefix):
+            return rank
+    return len(CATEGORY_ORDER)
+
+
 def split_patterns(text: str) -> list:
     return [p for p in re.split(r"[\s,;]+", text or "") if p]
 

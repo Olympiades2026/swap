@@ -8,9 +8,11 @@ Outil en Python (aucune dépendance, juste Python 3.9+) pour renouveler un poste
 
 > Pourquoi Python et pas PHP ? Il faut lire le registre Windows, la liste des logiciels, les imprimantes… PHP n'est pas fait pour ça, Python si.
 
-## Utilisation rapide : l'interface graphique
+## Utilisation rapide : l'interface web
 
-Double-cliquer sur `LANCER.bat` (ou `python -m swap gui`). Rien à installer d'autre que Python 3.9+ (tkinter est fourni avec l'installateur de python.org).
+Double-cliquer sur `LANCER.bat` (ou `python -m swap web`). swap démarre un petit serveur **sur ce poste uniquement** (127.0.0.1, protégé par un jeton aléatoire) et ouvre l'interface dans une fenêtre Edge/Chrome. Rien à installer d'autre que Python 3.9+ ; aucune connexion Internet n'est nécessaire (tout est dans le dossier). Thème clair ou sombre selon Windows.
+
+Pour arrêter : bouton **Quitter**, ou simplement fermer la fenêtre (swap s'arrête de lui-même après 5 minutes sans page ouverte, sauf si un transfert est en cours). L'ancienne fenêtre tkinter reste disponible : `python -m swap gui`.
 
 En haut : **PC source** (ce poste, détecté) → **PC cible** (à saisir : `TPSEL045` ou une adresse IP).
 
@@ -118,7 +120,7 @@ Remet chaque élément à sa place **sur le nouveau poste**, même si le nom d'u
 
 ```
 python -m unittest discover -s tests
-# avec l'interface (Linux sans écran) : xvfb-run -a python3 -m unittest discover -s tests
+# avec l'ancienne interface tkinter (Linux sans écran) : xvfb-run -a python3 -m unittest discover -s tests
 ```
 
 Le code d'inventaire est principalement pensé pour Windows ; sous Linux/macOS il analyse les dossiers et la copie/restauration fonctionne, mais pas les applications ni la configuration système.

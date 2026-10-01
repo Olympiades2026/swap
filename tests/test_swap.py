@@ -286,7 +286,7 @@ class TransferTests(unittest.TestCase):
             self.assertEqual(cli.main(["copy", "--dest", self.dest, "--out", out, "-y", "--skip", "ssh"]), 0)
             backup = os.path.join(self.dest, os.listdir(self.dest)[0])
             self.assertTrue(os.path.exists(os.path.join(backup, "RESTAURER.bat")))
-            self.assertIn("gui --backup", read(os.path.join(backup, "RESTAURER.bat")))
+            self.assertIn("web --backup", read(os.path.join(backup, "RESTAURER.bat")))
             self.assertTrue(os.path.exists(os.path.join(backup, "outil", "swap", "cli.py")))
             self.assertTrue(os.path.exists(os.path.join(backup, "outil", "swap", "gui.py")))
             self.assertFalse(os.path.exists(os.path.join(backup, "data", "config-ssh")))

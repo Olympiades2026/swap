@@ -254,6 +254,13 @@ def cmd_restore(args) -> int:
     return 0 if not res["errors"] else 2
 
 
+def cmd_web(args) -> int:
+    from .web import run
+
+    return run(args.out, getattr(args, "backup", None), getattr(args, "port", 0), not getattr(args, "no_browser", False),
+               getattr(args, "idle", 300))
+
+
 def cmd_gui(args) -> int:
     try:
         from .gui import run
@@ -301,7 +308,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"swap {__version__}")
     sub = p.add_subparsers(dest="cmd")
 
-    g = sub.add_parser("gui", help="ouvrir l'interface graphique")
+    w = sub.add_parser("web", help="ouvrir l'interface web (recommandé) dans le navigateur")
+    w.add_argument("--out", default=os.path.abspath(DEFAULT_OUT), help="dossier de sortie (défaut : %(default)s)")
+    w.add_argument("--backup", help="ouvrir directement la restauration de cette sauvegarde (utilisé par RESTAURER.bat)")
+    w.add_argument("--port", type=int, default=0, help="port local (défaut : au hasard)")
+    w.add_argument("--no-browser", action="store_true", help="ne pas ouvrir le navigateur (affiche seulement l'adresse)")
+    w.add_argument("--idle", type=int, default=300, help="s'arrêter après ce nombre de secondes sans page ouverte (0 = jamais ; défaut : %(default)s)")
+    w.set_defaults(func=cmd_web)
+
+    g = sub.add_parser("gui", help="ouvrir l'ancienne interface graphique (fenêtre tkinter)")
     g.add_argument("--out", default=os.path.abspath(DEFAULT_OUT), help="dossier de sortie (défaut : %(default)s)")
     g.add_argument("--backup", help="ouvrir directement la restauration de cette sauvegarde (utilisé par RESTAURER.bat)")
     g.set_defaults(func=cmd_gui)
@@ -361,15 +376,9 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _gui_possible() -> bool:
-    """Interface graphique par défaut sous Windows (ou si un écran est disponible) quand tkinter est installé."""
-    if os.name != "nt" and not os.environ.get("DISPLAY"):
-        return False
-    try:
-        import tkinter  # noqa: F401
-    except ImportError:
-        return False
-    return True
+def _web_possible() -> bool:
+    """Interface web par défaut sous Windows ou quand un écran est disponible ; sinon (SSH...) le menu texte."""
+    return os.name == "nt" or bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
 def main(argv=None) -> int:
@@ -377,8 +386,8 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         if not args.cmd:
-            if _gui_possible():
-                return cmd_gui(argparse.Namespace(out=os.path.abspath(DEFAULT_OUT)))
+            if _web_possible():
+                return cmd_web(argparse.Namespace(out=os.path.abspath(DEFAULT_OUT)))
             return menu() if sys.stdin.isatty() else (parser.print_help() or 0)
         return args.func(args)
     except KeyboardInterrupt:

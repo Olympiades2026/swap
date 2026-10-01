@@ -20,23 +20,12 @@ from tkinter import font as tkfont
 
 from . import __version__, net, transfer
 from .locations import profile_label
-from .session import Job, Session, find_backups
+from .session import Job, Session, category_rank, find_backups
 from .sink import SinkError
 from .util import human_size, is_windows
 
 PAD = 8
 CHECKED, UNCHECKED = "☑", "☐"
-
-
-CATEGORY_ORDER = ["Dossiers personnels", "PC SOFT", "Installateurs", "Dossiers hors profil", "Autres disques", "Configuration"]
-
-
-def category_rank(category: str) -> int:
-    """Ordre d'affichage : ce qui compte le plus pour l'utilisateur d'abord, la configuration des applis en dernier."""
-    for rank, prefix in enumerate(CATEGORY_ORDER):
-        if category.startswith(prefix):
-            return rank
-    return len(CATEGORY_ORDER)
 
 
 def open_path(path: str) -> None:

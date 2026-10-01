@@ -1,0 +1,897 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>swap — migration de poste</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Cpath d='M8 12h13l-3.5-3.5M24 20H11l3.5 3.5' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#f4f5f8; --surface:#fff; --surface-2:#f8f9fb; --ink:#141922; --muted:#5b6575; --line:#e2e5eb; --line-strong:#cdd2db;
+  --accent:#4f46e5; --accent-hover:#4338ca; --accent-soft:#eef0ff; --on-accent:#fff;
+  --ok:#157f3b; --ok-soft:#e6f6ec; --warn:#a15c07; --warn-soft:#fff4e0; --bad:#b42318; --bad-soft:#fdeceb;
+  --shadow:0 1px 2px rgba(20,25,34,.05),0 4px 14px rgba(20,25,34,.05);
+  --radius:14px; --mono:ui-monospace,"Cascadia Mono","SF Mono",Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI Variable","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e1116; --surface:#171b23; --surface-2:#1c212b; --ink:#e9ecf2; --muted:#9aa4b5; --line:#2a303b; --line-strong:#3a4252;
+    --accent:#818cf8; --accent-hover:#9aa3fb; --accent-soft:#222744; --on-accent:#0e1116;
+    --ok:#4ade80; --ok-soft:#12271b; --warn:#fbbf24; --warn-soft:#2b2210; --bad:#f87171; --bad-soft:#2d1717;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 14px rgba(0,0,0,.3);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e1116; --surface:#171b23; --surface-2:#1c212b; --ink:#e9ecf2; --muted:#9aa4b5; --line:#2a303b; --line-strong:#3a4252;
+  --accent:#818cf8; --accent-hover:#9aa3fb; --accent-soft:#222744; --on-accent:#0e1116;
+  --ok:#4ade80; --ok-soft:#12271b; --warn:#fbbf24; --warn-soft:#2b2210; --bad:#f87171; --bad-soft:#2d1717;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 14px rgba(0,0,0,.3);
+}
+*{box-sizing:border-box}
+html{color-scheme:light dark}
+:root[data-theme="light"]{color-scheme:light}
+:root[data-theme="dark"]{color-scheme:dark}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+h1,h2,h3{margin:0;line-height:1.25}
+h2{font-size:20px;letter-spacing:-.01em}
+h3{font-size:15px}
+p{margin:0}
+button,input,select,textarea{font:inherit;color:inherit}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px 120px}
+.mono{font-family:var(--mono)}
+.muted{color:var(--muted)}
+.hint{color:var(--muted);font-size:13px}
+[hidden]{display:none!important}
+
+/* barre du haut */
+.top{display:flex;align-items:center;gap:12px;max-width:1080px;margin:0 auto;padding:16px 20px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:650;font-size:17px;letter-spacing:-.01em}
+.brand small{font-weight:450;color:var(--muted);font-size:14px}
+.spacer{flex:1}
+.ver{color:var(--muted);font-size:13px}
+
+/* cartes et boutons */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:22px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--line-strong);background:var(--surface);
+  border-radius:10px;padding:9px 16px;cursor:pointer;font-weight:550;transition:background .12s,border-color .12s,transform .05s}
+.btn:hover{background:var(--surface-2);border-color:var(--muted)}
+.btn:active{transform:translateY(1px)}
+a.btn{text-decoration:none;color:inherit}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.primary:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+.btn.big{padding:12px 24px;font-size:16px;border-radius:12px}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--muted)}
+.btn.ghost:hover{background:var(--surface-2);color:var(--ink)}
+.btn.danger{color:var(--bad);border-color:var(--bad)}
+.btn[disabled]{opacity:.5;cursor:not-allowed;pointer-events:none}
+:focus-visible{outline:3px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:2px}
+input[type=text],input[type=number],select,textarea{width:100%;background:var(--surface);border:1px solid var(--line-strong);border-radius:10px;padding:9px 12px}
+input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{outline:3px solid color-mix(in srgb,var(--accent) 35%,transparent);border-color:var(--accent)}
+textarea{font-family:var(--mono);font-size:13px;resize:vertical}
+label.field{display:block;font-size:13px;font-weight:600;margin-bottom:5px}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.grow{flex:1;min-width:0}
+
+/* trajet source -> cible */
+.route{display:grid;grid-template-columns:1fr auto 1fr;gap:20px;align-items:center;margin-bottom:18px}
+.end .eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:650}
+.machine{font-size:26px;font-weight:700;letter-spacing:-.02em;margin:2px 0 10px;overflow:hidden;text-overflow:ellipsis}
+.arrow{color:var(--accent);display:grid;place-items:center}
+.arrow svg{width:44px;height:44px}
+.target-input{font-size:22px;font-weight:650;padding:8px 12px;font-family:var(--sans);text-transform:uppercase}
+.target-input::placeholder{text-transform:none;font-weight:450}
+.note-warn{margin-top:8px;font-size:13px;color:var(--warn);background:var(--warn-soft);border-radius:8px;padding:8px 10px}
+
+/* étapes */
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:18px}
+.step{display:flex;gap:12px;align-items:center;text-align:left;border:1px solid var(--line);background:var(--surface);border-radius:12px;
+  padding:12px 14px;cursor:pointer;transition:border-color .12s,box-shadow .12s}
+.step:hover{border-color:var(--line-strong)}
+.step .num{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:14px;
+  background:var(--surface-2);border:1px solid var(--line-strong);flex:none}
+.step b{display:block;font-size:14px}
+.step span.sub{display:block;font-size:12px;color:var(--muted)}
+.step.active{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}
+.step.active .num{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.step.done .num{background:var(--ok);border-color:var(--ok);color:#fff}
+
+.panel{display:none;animation:rise .18s ease-out}
+.panel.active{display:block}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.panel>.card+.card,.panel>.card+.stack,.stack>.card+.card{margin-top:16px}
+.lead{color:var(--muted);max-width:70ch;margin:6px 0 18px}
+
+/* tuiles et conseils */
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:4px 0 20px}
+.tile{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.tile .v{font-size:26px;font-weight:700;letter-spacing:-.02em;line-height:1.1}
+.tile .l{font-size:13px;color:var(--muted);margin-top:4px}
+.advice{display:flex;flex-direction:column;gap:10px;margin:0 0 18px;padding:0;list-style:none}
+.advice li{border:1px solid var(--line);border-left-width:4px;border-radius:10px;padding:11px 14px;background:var(--surface)}
+.advice .tag{display:inline-block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-right:8px}
+.advice li.critique{border-left-color:var(--bad);background:var(--bad-soft)} .advice li.critique .tag{color:var(--bad)}
+.advice li.important{border-left-color:var(--warn)} .advice li.important .tag{color:var(--warn)}
+.advice li.info{border-left-color:var(--line-strong)} .advice li.info .tag{color:var(--muted)}
+
+/* barres de progression */
+.progress{margin-top:16px}
+.bar{height:12px;background:var(--surface-2);border:1px solid var(--line);border-radius:99px;overflow:hidden}
+.bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),color-mix(in srgb,var(--accent) 65%,#22d3ee));border-radius:99px;transition:width .3s}
+.bar.indeterminate>i{width:35%;animation:slide 1.2s ease-in-out infinite}
+@keyframes slide{0%{margin-left:-35%}100%{margin-left:100%}}
+.pstats{display:flex;justify-content:space-between;gap:12px;margin-top:8px;font-size:14px;flex-wrap:wrap}
+.pstats .msg{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.pct{font-weight:700;font-size:22px;letter-spacing:-.02em}
+pre.log{margin:12px 0 0;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;max-height:260px;overflow:auto;
+  font:12.5px/1.55 var(--mono);white-space:pre-wrap;word-break:break-word}
+
+/* liste des éléments */
+.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.toolbar .search{flex:1;min-width:200px;position:relative}
+.toolbar .search input{padding-left:36px}
+.toolbar .search svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);width:17px;height:17px;color:var(--muted)}
+.group{border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:hidden}
+.group+.group{margin-top:12px}
+.ghead{display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--surface-2);cursor:pointer;user-select:none}
+.ghead h3{flex:1}
+.ghead .meta{color:var(--muted);font-size:13px}
+.ghead .chev{width:18px;height:18px;transition:transform .15s;color:var(--muted)}
+.group.closed .chev{transform:rotate(-90deg)}
+.group.closed .items{display:none}
+.item{display:grid;grid-template-columns:auto 1fr auto;gap:4px 14px;padding:11px 16px;border-top:1px solid var(--line);align-items:start;cursor:pointer}
+.item:hover{background:var(--surface-2)}
+.item .ttl{font-weight:580;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.item .src{grid-column:2;color:var(--muted);font:12px/1.4 var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item .note{grid-column:2;font-size:12.5px;color:var(--warn)}
+.item .size{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:550}
+.item .size small{display:block;color:var(--muted);font-weight:400;font-size:12px}
+.item.off .ttl,.item.off .size{opacity:.55}
+.badge{font-size:11px;font-weight:650;border-radius:99px;padding:1px 8px;background:var(--warn-soft);color:var(--warn)}
+.badge.soft{background:var(--accent-soft);color:var(--accent)}
+input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent);margin-top:2px;cursor:pointer}
+.sticky{position:fixed;left:0;right:0;bottom:0;z-index:5;background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(8px);
+  border-top:1px solid var(--line);padding:12px 20px}
+.sticky .in{max-width:1080px;margin:0 auto;display:flex;align-items:center;gap:16px}
+.sticky b{font-size:16px}
+details.adv{margin-top:18px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+details.adv summary{padding:12px 16px;cursor:pointer;font-weight:600}
+details.adv .body{padding:4px 16px 16px;display:grid;gap:14px}
+
+/* envoi */
+.modes{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.mode{border:1.5px solid var(--line);border-radius:12px;padding:16px;cursor:pointer;background:var(--surface);display:flex;flex-direction:column;gap:10px}
+.mode:hover{border-color:var(--line-strong)}
+.mode.sel{border-color:var(--accent);background:var(--accent-soft)}
+.mode .mh{display:flex;gap:10px;align-items:flex-start}
+.mode .mh svg{width:26px;height:26px;color:var(--accent);flex:none}
+.mode h3{font-size:15px}
+.mode .fields{display:grid;gap:10px;margin-top:2px}
+.mode:not(.sel) .fields{opacity:.45;pointer-events:none}
+.code-in{font-family:var(--mono);font-size:20px;letter-spacing:.14em;text-transform:uppercase;text-align:center}
+.switches{display:flex;gap:22px;flex-wrap:wrap;margin:18px 0 4px}
+.switch{display:flex;gap:10px;align-items:center;cursor:pointer}
+.switch input{appearance:none;width:38px;height:22px;border-radius:99px;background:var(--line-strong);position:relative;margin:0;cursor:pointer;transition:background .15s}
+.switch input::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .15s}
+.switch input:checked{background:var(--accent)}
+.switch input:checked::after{transform:translateX(16px)}
+.summary-line{background:var(--surface-2);border:1px dashed var(--line-strong);border-radius:10px;padding:10px 14px;margin:14px 0}
+.result{border-radius:12px;padding:16px 18px;margin-top:16px;border:1px solid}
+.result.ok{background:var(--ok-soft);border-color:var(--ok)}
+.result.bad{background:var(--bad-soft);border-color:var(--bad)}
+.result.warn{background:var(--warn-soft);border-color:var(--warn)}
+.result h3{margin-bottom:4px}
+.result ul{margin:8px 0 0;padding-left:20px}
+
+/* réception */
+.codebox{margin:16px 0 6px;border:2px dashed var(--accent);border-radius:14px;background:var(--accent-soft);padding:18px;text-align:center}
+.codebox .code{font:700 clamp(32px,6vw,52px)/1.1 var(--mono);letter-spacing:.12em;color:var(--accent)}
+.codebox .l{font-size:13px;color:var(--muted);margin-top:6px}
+.pulse{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--ok);margin-right:8px;animation:pulse 1.4s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 60%,transparent)}100%{box-shadow:0 0 0 10px transparent}}
+.twocol{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+.twocol>.card+.card{margin-top:0!important}
+.restore-list{margin:12px 0 0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.restore-list .r{display:grid;grid-template-columns:1fr auto;gap:2px 12px;padding:8px 12px;border-top:1px solid var(--line);font-size:13px}
+.restore-list .r:first-child{border-top:0}
+.restore-list .d{grid-column:1/-1;color:var(--muted);font:12px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* fenêtres et notifications */
+dialog{border:1px solid var(--line);border-radius:16px;background:var(--surface);color:var(--ink);padding:0;box-shadow:0 20px 60px rgba(0,0,0,.35);width:min(560px,calc(100vw - 32px))}
+dialog::backdrop{background:rgba(10,14,22,.5);backdrop-filter:blur(2px)}
+dialog .dh{padding:20px 22px 6px} dialog .db{padding:6px 22px 18px} dialog .df{padding:14px 22px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:6px 0}
+.kv dt{color:var(--muted)} .kv dd{margin:0;font-weight:560;overflow-wrap:anywhere}
+.bpath{display:flex;gap:8px;margin-bottom:10px}
+.drives{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.chip{border:1px solid var(--line-strong);border-radius:99px;padding:3px 12px;background:var(--surface);cursor:pointer;font-size:13px}
+.chip:hover{border-color:var(--accent)}
+.dirs{height:300px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+.dirs div{padding:8px 14px;border-top:1px solid var(--line);cursor:pointer;display:flex;gap:10px;align-items:center}
+.dirs div:first-child{border-top:0} .dirs div:hover{background:var(--surface-2)}
+.dirs svg{width:18px;height:18px;color:var(--accent);flex:none}
+#toasts{position:fixed;right:16px;top:16px;display:flex;flex-direction:column;gap:8px;z-index:50;max-width:min(440px,calc(100vw - 32px))}
+.toast{background:var(--surface);border:1px solid var(--line-strong);border-left:4px solid var(--accent);border-radius:10px;padding:11px 14px;box-shadow:var(--shadow);animation:rise .18s}
+.toast.bad{border-left-color:var(--bad)} .toast.ok{border-left-color:var(--ok)}
+#lost{position:fixed;inset:0;z-index:100;background:color-mix(in srgb,var(--bg) 88%,transparent);display:grid;place-items:center;text-align:center;padding:24px}
+#lost .card{max-width:440px}
+
+@media (max-width:860px){
+  .route{grid-template-columns:1fr}.arrow{transform:rotate(90deg)}
+  .steps{grid-template-columns:repeat(2,1fr)}.tiles{grid-template-columns:repeat(2,1fr)}
+  .modes,.twocol{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--accent)"/><path d="M8 12h13l-3.5-3.5M24 20H11l3.5 3.5" fill="none" stroke="var(--on-accent)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    swap <small>migration de poste</small>
+  </div>
+  <div class="spacer"></div>
+  <span class="ver" id="ver"></span>
+  <button class="btn ghost" id="btnQuit" title="Arrêter swap">Quitter</button>
+</header>
+
+<main class="wrap">
+  <section class="card route" aria-label="Trajet de la migration">
+    <div class="end">
+      <span class="eyebrow">PC source · ce poste</span>
+      <div class="machine" id="srcMachine">…</div>
+      <label class="field" for="srcUser">Utilisateur à migrer</label>
+      <select id="srcUser"></select>
+      <div class="note-warn" id="srcNote" hidden></div>
+    </div>
+    <div class="arrow" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 24h30M28 13l11 11-11 11"/></svg></div>
+    <div class="end">
+      <span class="eyebrow">PC cible · nouveau poste</span>
+      <input type="text" id="host" class="target-input" placeholder="TPSEL045" autocomplete="off" spellcheck="false" aria-label="Nom ou adresse IP du PC cible">
+      <p class="hint" style="margin-top:8px">Nom du PC (ex. TPSEL045) ou adresse IP. Inutile si vous envoyez sur un disque.</p>
+    </div>
+  </section>
+
+  <nav class="steps" id="steps" aria-label="Étapes">
+    <button class="step" data-step="1"><span class="num">1</span><span><b>Analyser</b><span class="sub">Lire ce poste</span></span></button>
+    <button class="step" data-step="2"><span class="num">2</span><span><b>Choisir</b><span class="sub">Quoi migrer</span></span></button>
+    <button class="step" data-step="3"><span class="num">3</span><span><b>Envoyer</b><span class="sub">Vers le PC cible</span></span></button>
+    <button class="step" data-step="4"><span class="num">4</span><span><b>Recevoir / restaurer</b><span class="sub">Sur le PC cible</span></span></button>
+  </nav>
+
+  <!-- 1. ANALYSER -->
+  <section class="panel" id="p1">
+    <div class="card">
+      <h2>Analyser le poste</h2>
+      <p class="lead">swap parcourt le poste (dossiers, applications, imprimantes, lecteurs réseau, certificats…) et prépare la liste de tout ce qui doit être migré. Cette étape ne modifie rien : elle lit seulement.</p>
+      <div class="row">
+        <button class="btn primary big needs-idle" id="btnScan">Analyser ce poste</button>
+        <button class="btn needs-idle" id="btnScanCancel" hidden>Annuler</button>
+        <button class="btn ghost needs-idle" id="btnLoadInv">Charger une analyse existante…</button>
+      </div>
+      <div class="progress" id="scanProg" hidden>
+        <div class="bar indeterminate"><i></i></div>
+        <div class="pstats"><span class="msg" id="scanMsg"></span></div>
+      </div>
+    </div>
+    <div class="card" id="scanResult" hidden>
+      <div class="row" style="justify-content:space-between;margin-bottom:14px">
+        <h2>Résultat de l'analyse</h2>
+        <span class="muted" id="scanWho"></span>
+      </div>
+      <div class="tiles">
+        <div class="tile"><div class="v" id="tItems">0</div><div class="l">éléments trouvés</div></div>
+        <div class="tile"><div class="v" id="tSel">0</div><div class="l">proposés par défaut</div></div>
+        <div class="tile"><div class="v" id="tSize">0</div><div class="l">à copier</div></div>
+        <div class="tile"><div class="v" id="tApps">0</div><div class="l">applications installées</div></div>
+      </div>
+      <h3 style="margin-bottom:10px">Points d'attention</h3>
+      <ul class="advice" id="advice"></ul>
+      <div class="row">
+        <a class="btn" id="lnkReport" target="_blank" rel="noopener" hidden>Ouvrir le rapport détaillé</a>
+        <div class="spacer"></div>
+        <button class="btn primary big" data-goto="2">Choisir ce qu'on migre →</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. CHOISIR -->
+  <section class="panel" id="p2">
+    <div class="card" id="noInv" hidden>
+      <h2>Rien à choisir pour l'instant</h2>
+      <p class="lead">Analysez d'abord le poste (étape 1).</p>
+      <button class="btn primary" data-goto="1">Aller à l'analyse</button>
+    </div>
+    <div id="chooseBody" hidden>
+      <div class="toolbar">
+        <div class="search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input type="text" id="filter" placeholder="Filtrer (nom, dossier, catégorie…)" autocomplete="off">
+        </div>
+        <button class="btn" id="btnAll">Tout cocher</button>
+        <button class="btn" id="btnNone">Tout décocher</button>
+        <button class="btn" id="btnDefaults">Sélection par défaut</button>
+      </div>
+      <div id="groups"></div>
+      <details class="adv">
+        <summary>Options avancées : règles de destination et exclusions</summary>
+        <div class="body">
+          <div>
+            <label class="field" for="rules">Règles de destination sur le PC cible (une par ligne : motif = dossier)</label>
+            <textarea id="rules" rows="4" spellcheck="false" placeholder="pcsoft-projet = C:\Mes Projets"></textarea>
+            <p class="hint" style="margin-top:6px">Exemple : <span class="mono">pcsoft-projet = C:\Mes Projets</span> envoie les projets PC SOFT dans ce dossier, sur le nouveau poste.</p>
+          </div>
+          <div>
+            <label class="field" for="excl">Ne pas copier ces fichiers</label>
+            <input type="text" id="excl" placeholder="*.iso *.msu" spellcheck="false">
+            <p class="hint" style="margin-top:6px">Motifs séparés par des espaces, ex. <span class="mono">*.iso *.msu</span>.</p>
+          </div>
+        </div>
+      </details>
+    </div>
+    <div class="sticky" id="chooseBar" hidden>
+      <div class="in"><div class="grow"><b id="selCount">0</b> <span class="muted">élément(s) cochés ·</span> <b id="selSize">0</b></div>
+        <button class="btn primary big" data-goto="3">Suivant : envoyer →</button></div>
+    </div>
+  </section>
+
+  <!-- 3. ENVOYER -->
+  <section class="panel" id="p3">
+    <div class="card">
+      <h2>Où envoyer ?</h2>
+      <p class="lead">Choisissez comment les données arrivent sur le PC cible.</p>
+      <div class="modes" id="modes">
+        <div class="mode sel" data-mode="direct">
+          <div class="mh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+            <div><h3>Connexion directe</h3><p class="hint">Le PC cible affiche un code (étape 4). Envoi chiffré, reprise possible.</p></div></div>
+          <div class="fields">
+            <div><label class="field" for="code">Code affiché sur le PC cible</label><input type="text" id="code" class="code-in" placeholder="XXXXX-XXXXX" maxlength="12" autocomplete="off" spellcheck="false"></div>
+            <div><label class="field" for="port">Port</label><input type="number" id="port" min="1" max="65535"></div>
+          </div>
+        </div>
+        <div class="mode" data-mode="share">
+          <div class="mh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            <div><h3>Partage Windows</h3><p class="hint">Rien à lancer sur le PC cible, mais il faut y être administrateur.</p></div></div>
+          <div class="fields">
+            <div class="row" style="flex-wrap:nowrap"><div style="width:90px"><label class="field" for="share">Partage</label><input type="text" id="share" value="C$"></div>
+              <div class="grow"><label class="field" for="subfolder">Dossier</label><input type="text" id="subfolder" value="SWAP"></div></div>
+            <p class="hint mono" id="unc"></p>
+          </div>
+        </div>
+        <div class="mode" data-mode="folder">
+          <div class="mh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M6 17h.01M7 14l1.5-8h7L17 14"/></svg>
+            <div><h3>Disque ou dossier</h3><p class="hint">Disque externe, clé USB ou dossier réseau.</p></div></div>
+          <div class="fields">
+            <div><label class="field" for="folder">Dossier de destination</label>
+              <div class="row" style="flex-wrap:nowrap"><input type="text" id="folder" placeholder="E:\Migration" spellcheck="false"><button class="btn" id="btnBrowseFolder">Parcourir</button></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="switches">
+        <label class="switch"><input type="checkbox" id="optHash"> Vérifier chaque fichier (SHA-256, plus lent)</label>
+        <label class="switch"><input type="checkbox" id="optDry"> Simulation (rien n'est envoyé)</label>
+      </div>
+      <div class="summary-line" id="sendSummary"></div>
+      <div class="row">
+        <button class="btn primary big needs-idle" id="btnSend">Envoyer</button>
+        <button class="btn needs-idle" id="btnTest">Tester la destination</button>
+        <button class="btn" id="btnSendCancel" hidden>Annuler</button>
+      </div>
+      <div class="progress" id="sendProg" hidden>
+        <div class="row" style="justify-content:space-between;align-items:baseline"><span class="pct" id="sendPct">0 %</span><span class="muted" id="sendSpeed"></span></div>
+        <div class="bar" id="sendBar" style="margin-top:6px"><i></i></div>
+        <div class="pstats"><span class="msg" id="sendMsg"></span><span id="sendEta" class="muted"></span></div>
+      </div>
+      <div id="sendResult"></div>
+      <details class="adv" id="sendLogBox" hidden style="margin-top:14px"><summary>Journal</summary><div class="body"><pre class="log" id="sendLog"></pre></div></details>
+    </div>
+  </section>
+
+  <!-- 4. RECEVOIR / RESTAURER -->
+  <section class="panel" id="p4">
+    <div class="twocol">
+      <div class="card">
+        <h2>Recevoir depuis un autre PC</h2>
+        <p class="lead" style="margin-bottom:14px">À faire sur le <b>PC cible</b> : démarrez la réception, puis saisissez le code sur le PC source.</p>
+        <label class="field" for="rxDest">Ranger ce qui est reçu dans</label>
+        <div class="row" style="flex-wrap:nowrap"><input type="text" id="rxDest" spellcheck="false"><button class="btn" id="btnBrowseRx">Parcourir</button></div>
+        <div class="row" style="margin-top:12px">
+          <div style="width:110px"><label class="field" for="rxPort">Port</label><input type="number" id="rxPort" min="1" max="65535"></div>
+          <label class="switch" style="margin-top:20px"><input type="checkbox" id="rxFw" checked> Ouvrir le port dans le pare-feu</label>
+        </div>
+        <p class="hint" style="margin-top:6px">Le pare-feu Windows est ouvert pendant la réception seulement (droits administrateur).</p>
+        <div class="row" style="margin-top:16px"><button class="btn primary big" id="btnRx">Démarrer la réception</button></div>
+        <div id="rxLive" hidden>
+          <div class="codebox"><div class="code" id="rxCode"></div><div class="l"><span class="pulse"></span><span id="rxWho"></span></div></div>
+          <div class="row"><button class="btn" id="btnCopyCode">Copier le code</button><span class="hint" id="rxProgress"></span></div>
+        </div>
+        <pre class="log" id="rxLog" hidden></pre>
+      </div>
+
+      <div class="card">
+        <h2>Restaurer sur ce PC</h2>
+        <p class="lead" style="margin-bottom:14px">Remet les fichiers en place sur ce poste, sans écraser l'existant.</p>
+        <label class="field" for="bkPath">Dossier de la sauvegarde (SWAP-…)</label>
+        <div class="row" style="flex-wrap:nowrap"><input type="text" id="bkPath" spellcheck="false" placeholder="C:\SWAP\SWAP-TPSEL023"><button class="btn" id="btnBrowseBk">Parcourir</button></div>
+        <div id="bkInfo" class="hint" style="margin-top:8px"></div>
+        <div style="margin-top:12px"><label class="field" for="tgtUser">Restaurer dans le profil</label><select id="tgtUser"></select>
+          <div class="note-warn" id="tgtNote" hidden></div></div>
+        <div class="switches" style="margin-top:14px">
+          <label class="switch"><input type="checkbox" id="rsOver"> Écraser l'existant</label>
+          <label class="switch"><input type="checkbox" id="rsDry"> Simulation</label>
+        </div>
+        <details class="adv" style="margin-top:8px"><summary>Règles de destination supplémentaires</summary>
+          <div class="body"><textarea id="rsRules" rows="3" spellcheck="false" placeholder="pcsoft-projet = C:\Mes Projets"></textarea></div></details>
+        <div class="row" style="margin-top:16px">
+          <button class="btn primary big needs-idle" id="btnRestore">Restaurer</button>
+          <button class="btn needs-idle" id="btnRestoreCancel" hidden>Annuler</button>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn needs-idle" id="btnScript">Lancer le script d'installation</button>
+          <a class="btn" id="lnkBkReport" target="_blank" rel="noopener" hidden>Ouvrir le rapport</a>
+        </div>
+        <div class="progress" id="rsProg" hidden>
+          <div class="row" style="justify-content:space-between;align-items:baseline"><span class="pct" id="rsPct">0 %</span><span class="muted" id="rsSpeed"></span></div>
+          <div class="bar" id="rsBar" style="margin-top:6px"><i></i></div>
+          <div class="pstats"><span class="msg" id="rsMsg"></span><span id="rsEta" class="muted"></span></div>
+        </div>
+        <div id="rsResult"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<dialog id="dlgConfirm"><div class="dh"><h2>Envoyer maintenant ?</h2></div><div class="db"><dl class="kv" id="confirmKv"></dl><div class="note-warn" id="confirmWarn" hidden></div>
+  <p class="hint" style="margin-top:10px">Les fichiers déjà présents et identiques ne sont pas renvoyés. Vous pouvez interrompre puis reprendre.</p></div>
+  <div class="df"><button class="btn" value="no" id="cfNo">Annuler</button><button class="btn primary" id="cfYes">Envoyer</button></div></dialog>
+
+<dialog id="dlgBrowse"><div class="dh"><h2>Choisir un dossier</h2></div><div class="db">
+  <div class="drives" id="bDrives"></div>
+  <div class="bpath"><input type="text" id="bPath" spellcheck="false"><button class="btn" id="bGo">Aller</button></div>
+  <div class="dirs" id="bDirs"></div></div>
+  <div class="df"><button class="btn" id="bCancel">Annuler</button><button class="btn primary" id="bOk">Choisir ce dossier</button></div></dialog>
+
+<dialog id="dlgInv"><div class="dh"><h2>Charger une analyse</h2></div><div class="db">
+  <label class="field" for="invPath">Chemin de inventaire.json</label><input type="text" id="invPath" spellcheck="false" placeholder="C:\swap-sortie\inventaire.json"></div>
+  <div class="df"><button class="btn" id="invCancel">Annuler</button><button class="btn primary" id="invOk">Charger</button></div></dialog>
+
+<dialog id="dlgRestore"><div class="dh"><h2>Restaurer maintenant ?</h2></div><div class="db"><dl class="kv" id="rsKv"></dl><div class="note-warn" id="rsWarn" hidden></div></div>
+  <div class="df"><button class="btn" id="rcNo">Annuler</button><button class="btn primary" id="rcYes">Restaurer</button></div></dialog>
+
+<div id="toasts" aria-live="polite"></div>
+<div id="lost" hidden><div class="card"><h2>swap est arrêté</h2><p class="lead" style="margin:8px 0 0">La connexion avec le programme est perdue. Si vous avez cliqué sur « Quitter », tout va bien. Sinon, relancez <b>LANCER.bat</b>.</p></div></div>
+
+<script>
+"use strict";
+const TOKEN = "__TOKEN__";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const S = {state: null, items: [], filter: "", closed: new Set(), mode: "direct", step: 1, since: 0, jobId: 0, handled: 0,
+           done: {1: false, 2: false, 3: false, 4: false}, browseTarget: null, bkTimer: null, lost: false};
+
+/* ---------- réseau ---------- */
+async function api(name, body) {
+  let r;
+  try {
+    r = await fetch("/api/" + name, {method: body === undefined ? "GET" : "POST",
+      headers: {"X-Swap-Token": TOKEN, "Content-Type": "application/json"}, body: body === undefined ? undefined : JSON.stringify(body)});
+  } catch (e) { lost(); throw new Error("Connexion perdue avec swap."); }
+  let j = {};
+  try { j = await r.json(); } catch (e) { j = {error: "Réponse illisible du programme."}; }
+  if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), {data: j});
+  return j;
+}
+function lost() { if (!S.lost) { S.lost = true; $("lost").hidden = false; } }
+function toast(msg, kind) {
+  const t = document.createElement("div");
+  t.className = "toast " + (kind || "");
+  t.textContent = msg;
+  $("toasts").appendChild(t);
+  setTimeout(() => t.remove(), kind === "bad" ? 9000 : 4500);
+}
+const fail = (e) => toast(e.message || String(e), "bad");
+const dur = (s) => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? `${h} h ${String(m).padStart(2, "0")} min` : m ? `${m} min ${String(s % 60).padStart(2, "0")} s` : `${s} s`; };
+
+/* ---------- étapes ---------- */
+function goStep(n) {
+  S.step = n;
+  document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.id === "p" + n));
+  document.querySelectorAll(".step").forEach((b) => {
+    const k = +b.dataset.step;
+    b.classList.toggle("active", k === n);
+    b.classList.toggle("done", S.done[k] && k !== n);
+    b.querySelector(".num").textContent = S.done[k] && k !== n ? "✓" : k;
+  });
+  $("chooseBar").hidden = !(n === 2 && S.state && S.state.has_inventory);
+  if (n === 2) renderChoose();
+  if (n === 3) renderSendSummary();
+  window.scrollTo({top: 0});
+}
+document.querySelectorAll(".step").forEach((b) => b.addEventListener("click", () => goStep(+b.dataset.step)));
+document.addEventListener("click", (e) => { const g = e.target.closest("[data-goto]"); if (g) goStep(+g.dataset.goto); });
+
+/* ---------- état général ---------- */
+async function loadState() {
+  const st = await api("state");
+  S.state = st;
+  $("ver").textContent = "v" + st.version;
+  $("srcMachine").textContent = st.machine;
+  fillProfiles($("srcUser"), st.profiles, st.source);
+  fillProfiles($("tgtUser"), st.profiles, null);
+  $("srcNote").hidden = st.source_is_current;
+  $("srcNote").textContent = st.source_is_current ? "" : "Profil d'un autre compte (droits administrateur requis) : registre, lecteurs réseau, certificats et identifiants ne sont pas lisibles.";
+  if (!$("rules").dataset.touched) $("rules").value = st.rules || "";
+  if (!$("excl").dataset.touched) $("excl").value = st.excludes || "";
+  if (!$("rxDest").value) $("rxDest").value = st.default_rx_dest;
+  if (!$("rxPort").value) $("rxPort").value = st.port;
+  if (!$("port").value) $("port").value = st.port;
+  S.done[1] = st.has_inventory;
+  renderInventory();
+  return st;
+}
+function fillProfiles(sel, profiles, chosen) {
+  const keep = sel.value;
+  sel.innerHTML = profiles.map((p) => `<option value="${esc(p.path)}">${esc(p.label)}</option>`).join("");
+  const want = chosen || keep || (profiles.find((p) => p.current) || {}).path;
+  if (want) sel.value = want;
+}
+function renderInventory() {
+  const inv = S.state.inventory;
+  $("scanResult").hidden = !inv;
+  if (!inv) return;
+  $("tItems").textContent = inv.items; $("tSel").textContent = inv.selected; $("tSize").textContent = inv.size_h; $("tApps").textContent = inv.apps;
+  $("scanWho").textContent = `${inv.machine} · ${inv.user || "?"} · ${(inv.date || "").replace("T", " ")}`;
+  const label = {critique: "Critique", important: "Important", info: "Info"};
+  $("advice").innerHTML = inv.advice.map((a) => `<li class="${esc(a.level)}"><span class="tag">${label[a.level] || esc(a.level)}</span>${esc(a.text)}</li>`).join("")
+    || `<li class="info"><span class="tag">Info</span>Rien de particulier à signaler.</li>`;
+  const lnk = $("lnkReport");
+  lnk.hidden = !inv.report;
+  lnk.href = "/report?t=" + encodeURIComponent(TOKEN);
+}
+
+$("srcUser").addEventListener("change", async () => {
+  try { const r = await api("set-source", {path: $("srcUser").value}); S.state.source_is_current = r.source_is_current;
+    $("srcNote").hidden = r.source_is_current;
+    $("srcNote").textContent = "Profil d'un autre compte (droits administrateur requis) : registre, lecteurs réseau, certificats et identifiants ne sont pas lisibles."; } catch (e) { fail(e); }
+});
+$("host").value = (() => { try { return localStorage.getItem("swap.host") || ""; } catch (e) { return ""; } })();
+$("host").addEventListener("input", () => { try { localStorage.setItem("swap.host", $("host").value); } catch (e) {} renderSendSummary(); });
+
+/* ---------- 1. analyser ---------- */
+$("btnScan").addEventListener("click", async () => {
+  try { await api("scan", {path: $("srcUser").value}); S.jobId = 0; S.since = 0; $("scanResult").hidden = true; poll(true); } catch (e) { fail(e); }
+});
+$("btnScanCancel").addEventListener("click", () => api("cancel", {}).catch(fail));
+$("btnLoadInv").addEventListener("click", () => $("dlgInv").showModal());
+$("invCancel").addEventListener("click", () => $("dlgInv").close());
+$("invOk").addEventListener("click", async () => {
+  try { await api("load-inventory", {path: $("invPath").value}); $("dlgInv").close(); await loadState(); toast("Analyse chargée.", "ok"); } catch (e) { fail(e); }
+});
+
+/* ---------- 2. choisir ---------- */
+async function renderChoose() {
+  const has = S.state && S.state.has_inventory;
+  $("noInv").hidden = !!has; $("chooseBody").hidden = !has; $("chooseBar").hidden = !has;
+  if (!has) return;
+  const r = await api("items");
+  S.items = r.items;
+  paintGroups();
+  paintTotals(r);
+}
+function paintTotals(t) {
+  $("selCount").textContent = t.selected; $("selSize").textContent = t.size_h;
+  if (S.state.inventory) { S.state.inventory.selected = t.selected; S.state.inventory.size_h = t.size_h; }
+}
+function paintGroups() {
+  const f = S.filter.trim().toLowerCase();
+  const rows = S.items.filter((i) => !f || (i.label + " " + i.category + " " + i.src + " " + i.id).toLowerCase().includes(f));
+  const groups = new Map();
+  rows.forEach((i) => { if (!groups.has(i.category)) groups.set(i.category, []); groups.get(i.category).push(i); });
+  const size = (n) => n < 1024 ? n + " o" : n < 1048576 ? (n / 1024).toFixed(1) + " Ko" : n < 1073741824 ? (n / 1048576).toFixed(1) + " Mo" : (n / 1073741824).toFixed(1) + " Go";
+  let html = "";
+  for (const [cat, list] of groups) {
+    const on = list.filter((i) => i.selected).length;
+    const bytes = list.filter((i) => i.selected).reduce((a, i) => a + (i.kind === "registry" ? 0 : i.size), 0);
+    const closed = S.closed.has(cat) && !f;
+    html += `<div class="group${closed ? " closed" : ""}" data-cat="${esc(cat)}"><div class="ghead">
+      <input type="checkbox" class="gcheck" ${on === list.length ? "checked" : ""} data-indet="${on > 0 && on < list.length ? 1 : 0}" aria-label="Tout cocher dans ${esc(cat)}">
+      <h3>${esc(cat)}</h3><span class="meta">${on}/${list.length} · ${size(bytes)}</span>
+      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></div><div class="items">`;
+    for (const i of list) {
+      html += `<div class="item${i.selected ? "" : " off"}" data-id="${esc(i.id)}"><input type="checkbox" ${i.selected ? "checked" : ""} aria-label="${esc(i.label)}">
+        <div><div class="ttl">${esc(i.label)}${i.sensitive ? ' <span class="badge">🔒 sensible</span>' : ""}${i.cloud ? ` <span class="badge soft">${i.cloud} en ligne seulement</span>` : ""}</div></div>
+        <div class="size">${esc(i.size_h)}<small>${i.files ? i.files + " fichier" + (i.files > 1 ? "s" : "") : ""}</small></div>
+        <div class="src" title="${esc(i.src)}">${esc(i.src)}</div>${i.note ? `<div class="note">${esc(i.note)}</div>` : ""}</div>`;
+    }
+    html += "</div></div>";
+  }
+  $("groups").innerHTML = html || `<div class="card"><p class="muted">Aucun élément ne correspond à « ${esc(S.filter)} ».</p></div>`;
+  document.querySelectorAll(".gcheck").forEach((c) => { c.indeterminate = c.dataset.indet === "1"; });
+}
+$("groups").addEventListener("click", async (e) => {
+  const head = e.target.closest(".ghead"), item = e.target.closest(".item");
+  try {
+    if (head) {
+      const g = head.parentElement, cat = g.dataset.cat;
+      if (e.target.classList.contains("gcheck")) {
+        const ids = S.items.filter((i) => i.category === cat && (!S.filter || g.querySelector(`[data-id="${CSS.escape(i.id)}"]`))).map((i) => i.id);
+        const value = e.target.checked;
+        ids.forEach((id) => { S.items.find((i) => i.id === id).selected = value; });
+        paintGroups(); paintTotals(await api("select", {ids, value}));
+      } else { S.closed.has(cat) ? S.closed.delete(cat) : S.closed.add(cat); g.classList.toggle("closed"); }
+    } else if (item) {
+      const it = S.items.find((i) => i.id === item.dataset.id);
+      it.selected = !it.selected;
+      paintGroups(); paintTotals(await api("select", {ids: [it.id], value: it.selected}));
+    }
+  } catch (err) { fail(err); }
+});
+$("filter").addEventListener("input", () => { S.filter = $("filter").value; paintGroups(); });
+const selectAll = (body) => async () => { try { const t = await api("select", body); S.items = (await api("items")).items; paintGroups(); paintTotals(t); } catch (e) { fail(e); } };
+$("btnAll").addEventListener("click", selectAll({all: true}));
+$("btnNone").addEventListener("click", selectAll({all: false}));
+$("btnDefaults").addEventListener("click", selectAll({defaults: true}));
+let optTimer;
+function pushOptions() { clearTimeout(optTimer); optTimer = setTimeout(() => api("options", {rules: $("rules").value, excludes: $("excl").value}).catch(() => {}), 300); }
+["rules", "excl"].forEach((id) => $(id).addEventListener("input", () => { $(id).dataset.touched = "1"; pushOptions(); }));
+
+/* ---------- 3. envoyer ---------- */
+document.querySelectorAll(".mode").forEach((m) => m.addEventListener("click", () => {
+  S.mode = m.dataset.mode;
+  document.querySelectorAll(".mode").forEach((x) => x.classList.toggle("sel", x === m));
+  renderSendSummary();
+}));
+["share", "subfolder", "code", "port", "folder"].forEach((id) => $(id).addEventListener("input", renderSendSummary));
+$("code").addEventListener("input", () => {
+  const raw = $("code").value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10);
+  $("code").value = raw.length > 5 ? raw.slice(0, 5) + "-" + raw.slice(5) : raw;
+});
+function unc() { return "\\\\" + ($("host").value.trim() || "TPSELxxx") + "\\" + ($("share").value || "C$") + ($("subfolder").value ? "\\" + $("subfolder").value : ""); }
+function whereText() {
+  return S.mode === "direct" ? `le PC ${$("host").value.trim() || "(à saisir)"} · connexion directe`
+       : S.mode === "share" ? unc() : ($("folder").value.trim() || "(dossier à choisir)");
+}
+function renderSendSummary() {
+  $("unc").textContent = unc();
+  const inv = S.state && S.state.inventory;
+  $("sendSummary").innerHTML = inv ? `<b>${inv.selected}</b> élément(s) · <b>${esc(inv.size_h)}</b> de <b>${esc(inv.machine)}</b> (${esc(inv.user || "?")}) → <b>${esc(whereText())}</b>`
+    : `Analysez d'abord le poste (étape 1).`;
+}
+function sendBody() {
+  return {mode: S.mode, host: $("host").value, code: $("code").value, port: $("port").value, share: $("share").value, subfolder: $("subfolder").value,
+          folder: $("folder").value, hash: $("optHash").checked, dry: $("optDry").checked, rules: $("rules").value, excludes: $("excl").value};
+}
+$("btnTest").addEventListener("click", async () => {
+  try { $("sendResult").innerHTML = ""; await api("test", sendBody()); S.jobId = 0; S.since = 0; $("sendLog").textContent = ""; poll(true); } catch (e) { fail(e); }
+});
+$("btnSend").addEventListener("click", () => {
+  const inv = S.state && S.state.inventory;
+  if (!inv) { toast("Analysez d'abord ce poste (étape 1).", "bad"); return goStep(1); }
+  if (!inv.selected) { toast("Rien n'est coché dans l'étape « Choisir ».", "bad"); return goStep(2); }
+  const dry = $("optDry").checked;
+  if (dry) return doSend();
+  $("confirmKv").innerHTML = `<dt>Éléments</dt><dd>${inv.selected} · ${esc(inv.size_h)}</dd><dt>De</dt><dd>${esc(inv.machine)} (${esc(inv.user || "?")})</dd><dt>Vers</dt><dd>${esc(whereText())}</dd>`;
+  const sens = S.items.some((i) => i.selected && i.sensitive);
+  $("confirmWarn").hidden = !sens;
+  $("confirmWarn").textContent = sens ? "🔒 La copie contient des données sensibles (clés SSH, sessions…). Utilisez un support chiffré si possible." : "";
+  $("dlgConfirm").showModal();
+});
+$("cfNo").addEventListener("click", () => $("dlgConfirm").close());
+$("cfYes").addEventListener("click", () => { $("dlgConfirm").close(); doSend(); });
+async function doSend() {
+  try { $("sendResult").innerHTML = ""; $("sendLog").textContent = ""; await api("send", sendBody()); S.jobId = 0; S.since = 0; poll(true); } catch (e) { fail(e); }
+}
+$("btnSendCancel").addEventListener("click", () => api("cancel", {}).catch(fail));
+$("btnBrowseFolder").addEventListener("click", (e) => { e.stopPropagation(); browse($("folder")); });
+
+/* ---------- 4. recevoir / restaurer ---------- */
+$("btnRx").addEventListener("click", async () => {
+  try {
+    const r = S.rx && S.rx.active ? await api("rx-stop", {}) : await api("rx-start", {dest: $("rxDest").value, port: $("rxPort").value, firewall: $("rxFw").checked});
+    renderRx(r); poll(true);
+  } catch (e) { fail(e); }
+});
+$("btnCopyCode").addEventListener("click", () => { navigator.clipboard.writeText($("rxCode").textContent).then(() => toast("Code copié.", "ok"), () => toast("Copie impossible : sélectionnez le code à la main.", "bad")); });
+let rxDoneShown = "";
+function renderRx(rx) {
+  S.rx = rx;
+  $("btnRx").textContent = rx.active ? "Arrêter la réception" : "Démarrer la réception";
+  $("rxLive").hidden = !rx.active;
+  if (rx.active) {
+    $("rxCode").textContent = rx.code;
+    $("rxWho").textContent = `${rx.hostname} · ${rx.addresses.join(", ") || "?"} · port ${rx.port}`;
+  }
+  $("rxProgress").textContent = rx.progress || (rx.active ? "En attente de l'envoi du PC source…" : "");
+  $("rxLog").hidden = !rx.log.length;
+  $("rxLog").textContent = rx.log.join("\n");
+  if (rx.done_root && rx.done_root !== rxDoneShown) {
+    rxDoneShown = rx.done_root;
+    $("bkPath").value = rx.done_root; checkBackup();
+    S.done[4] = false; toast("Réception terminée. Vous pouvez lancer « Restaurer ».", "ok");
+  }
+}
+$("bkPath").addEventListener("input", () => { clearTimeout(S.bkTimer); S.bkTimer = setTimeout(checkBackup, 400); });
+async function checkBackup() {
+  const path = $("bkPath").value.trim();
+  if (!path) { $("bkInfo").textContent = ""; $("lnkBkReport").hidden = true; return; }
+  try {
+    const b = await api("backup-info", {path});
+    $("lnkBkReport").hidden = !b.report;
+    $("lnkBkReport").href = "/backup-report?t=" + encodeURIComponent(TOKEN) + "&path=" + encodeURIComponent(b.backup);
+    if (b.backup) {
+      if (b.backup !== path) $("bkPath").value = b.backup;
+      $("bkInfo").innerHTML = `✔ Sauvegarde de <b>${esc(b.machine)}</b>, compte <b>${esc(b.user || "?")}</b> · ${b.items} élément(s) · ${esc((b.created || "").replace("T", " "))}`
+        + (b.match ? "" : `<br><span style="color:var(--warn)">Aucun profil « ${esc(b.user)} » sur ce PC : choisissez le compte de destination.</span>`);
+      if (b.match) $("tgtUser").value = b.match;
+    } else {
+      $("bkInfo").innerHTML = b.found.length > 1 ? `Plusieurs sauvegardes trouvées : ${b.found.map((f) => `<a href="#" class="pick" data-p="${esc(f)}">${esc(f)}</a>`).join(" · ")}`
+        : `<span style="color:var(--warn)">Pas de sauvegarde (manifest.json) à cet endroit.</span>`;
+    }
+    syncTgtNote();
+  } catch (e) { $("bkInfo").textContent = ""; }
+}
+$("bkInfo").addEventListener("click", (e) => { const a = e.target.closest(".pick"); if (a) { e.preventDefault(); $("bkPath").value = a.dataset.p; checkBackup(); } });
+function syncTgtNote() {
+  const prof = S.state.profiles.find((p) => p.path === $("tgtUser").value);
+  const other = prof && !prof.current;
+  $("tgtNote").hidden = !other;
+  $("tgtNote").textContent = other ? "Ce n'est pas le compte connecté : les fichiers sont restaurés dans ce profil, mais le registre ne peut pas être importé (relancez connecté avec ce compte)." : "";
+}
+$("tgtUser").addEventListener("change", syncTgtNote);
+$("btnBrowseBk").addEventListener("click", () => browse($("bkPath"), checkBackup));
+$("btnBrowseRx").addEventListener("click", () => browse($("rxDest")));
+function restoreBody() { return {path: $("bkPath").value, target: $("tgtUser").value, overwrite: $("rsOver").checked, dry: $("rsDry").checked, rules: $("rsRules").value}; }
+$("btnRestore").addEventListener("click", async () => {
+  const b = await api("backup-info", {path: $("bkPath").value}).catch(fail);
+  if (!b) return;
+  if (!b.backup) return toast("Indiquez le dossier de la sauvegarde (celui qui contient manifest.json).", "bad");
+  if ($("rsDry").checked) return doRestore();
+  const prof = S.state.profiles.find((p) => p.path === $("tgtUser").value);
+  $("rsKv").innerHTML = `<dt>Sauvegarde</dt><dd>${esc(b.machine)} · ${esc(b.user || "?")}</dd><dt>Dans le profil</dt><dd>${esc(prof ? prof.name : "compte connecté")}</dd>`
+    + `<dt>Fichiers existants</dt><dd>${$("rsOver").checked ? "ÉCRASÉS" : "jamais écrasés"}</dd>`;
+  $("rsWarn").hidden = false;
+  $("rsWarn").textContent = "Fermez d'abord Outlook, les navigateurs et VS Code (sur ce compte)." + (prof && !prof.current ? " Le registre ne sera pas importé (compte non connecté)." : "");
+  $("dlgRestore").showModal();
+});
+$("rcNo").addEventListener("click", () => $("dlgRestore").close());
+$("rcYes").addEventListener("click", () => { $("dlgRestore").close(); doRestore(); });
+async function doRestore() { try { $("rsResult").innerHTML = ""; await api("restore", restoreBody()); S.jobId = 0; S.since = 0; poll(true); } catch (e) { fail(e); } }
+$("btnRestoreCancel").addEventListener("click", () => api("cancel", {}).catch(fail));
+$("btnScript").addEventListener("click", async () => {
+  if (!confirm("Le script recrée les lecteurs réseau et imprimantes, ajoute des variables d'environnement, installe les applications (winget) puis lance les installateurs récupérés.\n\nLancer le script ?")) return;
+  try { await api("run-script", {path: $("bkPath").value}); toast("Script lancé dans une fenêtre PowerShell.", "ok"); } catch (e) { fail(e); }
+});
+
+/* ---------- dossiers ---------- */
+function browse(input, after) {
+  S.browseTarget = {input, after};
+  loadDir(input.value.trim()).then(() => $("dlgBrowse").showModal());
+}
+async function loadDir(path) {
+  try {
+    const r = await api("browse", {path});
+    $("bPath").value = r.path;
+    $("bDrives").innerHTML = r.drives.map((d) => `<button class="chip" data-d="${esc(d)}">${esc(d)}</button>`).join("");
+    const folder = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+    $("bDirs").innerHTML = (r.parent ? `<div data-d="${esc(r.parent)}">${folder}..</div>` : "")
+      + r.dirs.map((n) => `<div data-d="${esc(r.path.replace(/[\\/]+$/, "") + (r.path.includes("\\") ? "\\" : "/") + n)}">${folder}${esc(n)}</div>`).join("");
+    $("bDirs").scrollTop = 0;
+  } catch (e) { fail(e); }
+}
+$("bDirs").addEventListener("click", (e) => { const d = e.target.closest("[data-d]"); if (d) loadDir(d.dataset.d); });
+$("bDrives").addEventListener("click", (e) => { const d = e.target.closest("[data-d]"); if (d) loadDir(d.dataset.d); });
+$("bGo").addEventListener("click", () => loadDir($("bPath").value));
+$("bPath").addEventListener("keydown", (e) => { if (e.key === "Enter") loadDir($("bPath").value); });
+$("bCancel").addEventListener("click", () => $("dlgBrowse").close());
+$("bOk").addEventListener("click", () => {
+  const t = S.browseTarget; t.input.value = $("bPath").value; t.input.dispatchEvent(new Event("input")); $("dlgBrowse").close(); if (t.after) t.after();
+});
+
+/* ---------- suivi des tâches ---------- */
+const SLOT = {scan: "scan", test: "send", send: "send", restore: "rs"};
+function setProgress(prefix, j) {
+  const bar = $(prefix + "Bar");
+  const pct = j.total > 0 ? Math.min(100, j.done * 100 / j.total) : (j.running ? 0 : 100);
+  bar.firstElementChild.style.width = pct + "%";
+  $(prefix + "Pct").textContent = Math.floor(pct) + " %";
+  $(prefix + "Speed").textContent = j.total > 0 ? `${j.done_h} / ${j.total_h} · ${j.speed_h}` : "";
+  $(prefix + "Msg").textContent = j.running ? (j.message || "") : (j.cancelled ? "Annulé." : j.error ? "Interrompu." : "Terminé.");
+  $(prefix + "Eta").textContent = j.running && j.eta != null ? "reste ~" + dur(j.eta) : "";
+}
+function renderJob(j) {
+  const busy = !!(j && j.running);
+  document.body.classList.toggle("busy", busy);
+  document.querySelectorAll(".needs-idle").forEach((b) => { if (b.id.indexOf("Cancel") < 0) b.disabled = busy; });
+  $("btnScanCancel").hidden = !(busy && j.kind === "scan");
+  $("btnSendCancel").hidden = !(busy && (j.kind === "send"));
+  $("btnRestoreCancel").hidden = !(busy && j.kind === "restore");
+  if (!j) return;
+  const slot = SLOT[j.kind];
+  if (slot === "scan") { $("scanProg").hidden = !busy; $("scanMsg").textContent = j.message || ""; }
+  if (slot === "send") {
+    $("sendProg").hidden = !(busy || j.total > 0);
+    if (j.kind === "send" || busy) setProgress("send", j);
+    $("sendLogBox").hidden = !(j.log_total > 0 || $("sendLog").textContent);
+    appendLog($("sendLog"), j);
+  }
+  if (slot === "rs") { $("rsProg").hidden = false; setProgress("rs", j); }
+}
+function appendLog(pre, j) {
+  if (j.log.length) { pre.textContent += (pre.textContent ? "\n" : "") + j.log.join("\n"); pre.scrollTop = pre.scrollHeight; }
+  S.since = j.log_total;
+}
+async function finishJob(j) {
+  S.handled = j.id;
+  if (j.kind === "scan") {
+    $("scanProg").hidden = true;
+    if (j.cancelled) return toast("Analyse annulée.");
+    if (j.error) return toast("L'analyse a échoué : " + j.error, "bad");
+    await loadState(); S.done[1] = true; goStep(1); toast("Analyse terminée.", "ok");
+  } else if (j.kind === "test") {
+    $("sendProg").hidden = true;
+    $("sendResult").innerHTML = j.error ? `<div class="result bad"><h3>Destination inaccessible</h3>${esc(j.error)}</div>` : `<div class="result ok"><h3>✔ Destination accessible</h3>${esc(j.result.message)}</div>`;
+  } else if (j.kind === "send") {
+    if (j.cancelled) { $("sendResult").innerHTML = `<div class="result warn"><h3>Envoi annulé</h3>Relancez « Envoyer » : la copie reprend là où elle s'est arrêtée.</div>`; return; }
+    if (j.error) { $("sendResult").innerHTML = `<div class="result bad"><h3>Envoi interrompu</h3>${esc(j.error)}${j.error_kind === "sink" ? "<br>Relancez « Envoyer » : seuls les fichiers manquants seront renvoyés." : ""}</div>`; return; }
+    const r = j.result;
+    S.done[3] = !r.dry;
+    $("sendResult").innerHTML = `<div class="result ${r.error_count ? "warn" : "ok"}"><h3>${r.dry ? "Simulation terminée" : "✔ Envoi terminé"}</h3>${r.copied} fichier(s) copié(s), ${r.unchanged} déjà à jour`
+      + (r.error_count ? `, <b>${r.error_count} non copié(s)</b> (voir le journal)` : "") + `.`
+      + (r.dry ? "" : `<br>Sauvegarde : <span class="mono">${esc(r.backup)}</span><br>Étape suivante, sur le PC cible : « Recevoir / restaurer » (ou <span class="mono">RESTAURER.bat</span> dans le dossier reçu).`)
+      + (r.errors.length ? `<ul>${r.errors.slice(0, 8).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "") + `</div>`;
+    if (!r.dry && S.mode !== "direct") { $("bkPath").value = r.backup; checkBackup(); }
+    goStep(3);
+  } else if (j.kind === "restore") {
+    if (j.cancelled) { $("rsResult").innerHTML = `<div class="result warn"><h3>Restauration annulée</h3>Les fichiers déjà restaurés restent en place.</div>`; return; }
+    if (j.error) { $("rsResult").innerHTML = `<div class="result bad"><h3>La restauration a échoué</h3>${esc(j.error)}</div>`; return; }
+    const r = j.result; S.done[4] = true;
+    $("rsResult").innerHTML = `<div class="result ${r.error_count ? "warn" : "ok"}"><h3>✔ Restauration terminée</h3>${r.error_count ? `${r.error_count} erreur(s).` : "Tout est en place."}`
+      + (r.errors.length ? `<ul>${r.errors.slice(0, 6).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "")
+      + `<div class="restore-list">${r.items.map((i) => `<div class="r"><span>${esc(i.id)}</span><span class="muted">${i.restored} restauré(s) · ${i.skipped} présent(s)</span>${i.dest ? `<span class="d">→ ${esc(i.dest)}</span>` : ""}</div>`).join("")}</div>`
+      + `<p class="hint" style="margin-top:10px">Étape suivante : « Lancer le script d'installation » (applications, lecteurs réseau, imprimantes).</p></div>`;
+  }
+  goStep(S.step);
+}
+let polling = false, wake = 0;
+async function poll(force) {
+  if (force) wake++;
+  if (polling) return;
+  polling = true;
+  try {
+    for (;;) {
+      const st = await api("status?since=" + S.since);
+      const j = st.job;
+      if (j && j.id !== S.jobId) S.jobId = j.id;
+      renderJob(j);
+      renderRx(st.rx);
+      if (j && !j.running && S.handled !== j.id) await finishJob(j);
+      if (!(j && j.running) && !st.rx.active) break;
+      await new Promise((r) => setTimeout(r, 450));
+    }
+  } catch (e) { /* connexion perdue : gérée par lost() */ }
+  polling = false;
+}
+setInterval(() => { if (!polling && !S.lost) poll(); }, 5000);   // signe de vie : swap s'arrête tout seul si la page est fermée
+
+$("btnQuit").addEventListener("click", async () => {
+  if (!confirm("Arrêter swap ? Une copie en cours serait interrompue (elle pourra reprendre).")) return;
+  try { await api("quit", {}); } catch (e) {}
+  lost();
+});
+
+/* ---------- démarrage ---------- */
+(async function init() {
+  try {
+    const st = await loadState();
+    const first = await api("status");
+    renderRx(first.rx);
+    if (first.job) { S.jobId = first.job.id; if (!first.job.running) S.handled = first.job.id; }
+    renderSendSummary();
+    if (st.initial_backup) { $("bkPath").value = st.initial_backup; await checkBackup(); goStep(4); }
+    else goStep(st.has_inventory ? 2 : 1);
+    poll(true);
+  } catch (e) { fail(e); }
+})();
+</script>
+</body>
+</html>
