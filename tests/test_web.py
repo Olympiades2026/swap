@@ -278,6 +278,102 @@ class WebTests(unittest.TestCase):
         status, data = self.call("rx-start", {"dest": "", "port": 0})
         self.assertEqual(status, 400)
 
+    # -- installation directe sur le PC cible (tout depuis ce poste) ----------------------------------------
+    def fake_target(self):
+        """Un « PC cible » : Users\\carol et le lecteur C: accessibles par des dossiers locaux."""
+        target = os.path.join(self.tmp.name, "TPSEL045")
+        os.makedirs(os.path.join(target, "Users", "carol"))
+        os.makedirs(os.path.join(target, "Users", "Public"))
+        self.session.remote_users_base = lambda host: os.path.join(target, "Users")
+        self.session.remote_drive_root = lambda host, drive: os.path.join(target, "disque-" + drive.upper().rstrip(":"))
+        return target
+
+    def test_remote_users_are_listed_and_unreachable_pc_is_explained(self):
+        self.fake_target()
+        users = self.ok("remote-users", {"host": "TPSEL045"})["users"]
+        self.assertEqual([u["name"] for u in users], ["carol"])               # Public n'est pas un utilisateur
+        status, data = self.call("remote-users", {"host": ""})
+        self.assertEqual(status, 400)
+        self.session.remote_users_base = None                                 # vrai chemin \\\\PC\\C$\\Users : injoignable ici
+        status, data = self.call("remote-users", {"host": "PC-QUI-N-EXISTE-PAS"})
+        self.assertEqual(status, 400)
+        self.assertIn("inaccessible", data["error"])
+
+    def test_send_straight_into_the_profile_of_the_target_pc(self):
+        target = self.fake_target()
+        carol = os.path.join(target, "Users", "carol")
+        write(os.path.join(carol, "Documents", "rapport.docx"), "VERSION DE CAROL")        # existe déjà, différent
+        self.scanned()
+        self.ok("options", {"rules": "dossier-desktop = C:\\Bureau 2", "excludes": ""})
+        self.ok("send", {"mode": "remote", "host": "TPSEL045", "user": "carol"})
+        job = self.wait_job()
+        self.assertIsNone(job["error"], job)
+        r = job["result"]
+        self.assertEqual(r["errors"], [])
+        self.assertEqual(r["placed_in"], carol)
+        # fichiers directement à leur place, sans dossier de sauvegarde intermédiaire
+        self.assertEqual(read(os.path.join(carol, "Documents", "compta", "budget.xlsm")), "macro")
+        self.assertEqual(read(os.path.join(carol, "AppData", "Roaming", "Notepad++", "config.xml")), "<cfg/>")
+        self.assertEqual(read(os.path.join(carol, ".gitconfig")), "[user]")                  # élément « fichier »
+        self.assertEqual(read(os.path.join(target, "disque-C", "Bureau 2", "note.txt")), "note")   # règle de destination C:\\...
+        self.assertFalse(os.path.exists(os.path.join(carol, "Desktop", "note.txt")))
+        self.assertEqual(read(os.path.join(carol, "Documents", "rapport.docx")), "VERSION DE CAROL")   # jamais écrasé
+        # rapport, manifeste et script d'installation déposés sur le PC cible
+        meta = r["report_dir"]
+        self.assertEqual(meta, os.path.join(target, "disque-C", "SWAP", "SWAP-" + self.session.machine))
+        for name in ("manifest.json", "rapport.html", "installer_et_configurer.ps1", "RESTAURER.bat"):
+            self.assertTrue(os.path.exists(os.path.join(meta, name)), name)
+        self.assertEqual(json.loads(read(os.path.join(meta, "manifest.json")))["placed"], {"host": "TPSEL045", "user": "carol"})
+        self.assertFalse(os.path.exists(os.path.join(meta, "data", "dossier-documents")))
+        # on ne peut pas « restaurer » ce dossier : tout est déjà en place
+        status, data = self.call("restore", {"path": meta, "target": ""})
+        self.assertEqual(status, 200)
+        res = self.wait_job()
+        self.assertIn("déjà été installée", res["error"])
+
+    def test_remote_overwrite_option_replaces_existing_files(self):
+        target = self.fake_target()
+        carol = os.path.join(target, "Users", "carol")
+        write(os.path.join(carol, "Documents", "rapport.docx"), "VERSION DE CAROL")
+        self.scanned()
+        self.ok("send", {"mode": "remote", "host": "TPSEL045", "user": "carol", "overwrite": True})
+        self.assertIsNone(self.wait_job()["error"])
+        self.assertEqual(read(os.path.join(carol, "Documents", "rapport.docx")), "rapport")
+
+    def test_remote_dry_run_and_registry_items_are_reported(self):
+        from swap.model import Item
+
+        target = self.fake_target()
+        self.scanned()
+        reg = Item(id="registre-putty", label="PuTTY (registre)", kind="registry", src=r"HKCU\Software\SimonTatham", target={"kind": "registry"},
+                   category="Configuration des applications")
+        self.session.items.append(reg)
+        self.session.selected.add(reg.id)
+        self.ok("send", {"mode": "remote", "host": "TPSEL045", "user": "carol", "dry": True})
+        job = self.wait_job()
+        self.assertTrue(job["result"]["dry"])
+        self.assertEqual(job["result"]["skipped_registry"], ["PuTTY (registre)"])
+        self.assertFalse(os.path.exists(os.path.join(target, "Users", "carol", "Documents", "rapport.docx")))
+        self.assertTrue(any("registre" in line for line in job["log"]))
+
+    def test_remote_validation(self):
+        self.fake_target()
+        self.scanned()
+        status, data = self.call("send", {"mode": "remote", "host": "TPSEL045", "user": ""})
+        self.assertEqual(status, 400)
+        self.assertIn("utilisateur", data["error"])
+        status, data = self.call("send", {"mode": "remote", "host": "", "user": "carol"})
+        self.assertEqual(status, 400)
+        self.ok("send", {"mode": "remote", "host": "TPSEL045", "user": "inconnu"})
+        job = self.wait_job()
+        self.assertEqual(job["error_kind"], "sink")
+        self.assertIn("n'existe pas", job["error"])
+
+    def test_remote_destination_test_names_the_profiles(self):
+        self.fake_target()
+        self.ok("test", {"mode": "remote", "host": "TPSEL045", "user": "carol"})
+        self.assertIn("carol", self.wait_job()["result"]["message"])
+
     # -- navigation dans les dossiers, rapports, fin ---------------------------------------------------------
     def test_browse_lists_folders_and_rejects_files(self):
         r = self.ok("browse", {"path": self.users})

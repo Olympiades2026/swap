@@ -16,7 +16,7 @@ from .fs import Excluder, make_excluder, walk
 from .locations import Locations
 from .model import Item
 from .redirects import plan_redirects
-from .sink import CHUNK, PART, Cancelled, LocalSink, copy_file, file_hash  # noqa: F401  (réexportés)
+from .sink import CHUNK, PART, Cancelled, LocalSink, SinkError, copy_file, file_hash  # noqa: F401  (réexportés)
 from .util import human_size, is_windows, long_path
 
 MANIFEST = "manifest.json"
@@ -134,7 +134,7 @@ def check_space(items: list, dest: str) -> tuple:
 
 def run_backup(items: list, inv: dict, dest: Optional[str] = None, *, sink=None, dry_run=False, want_hash=False,
                progress: Optional[Callable] = None, redirects: Optional[list] = None, exclude_files=(),
-               on_chunk: Optional[Callable[[int], None]] = None) -> dict:
+               on_chunk: Optional[Callable[[int], None]] = None, extra_manifest: Optional[dict] = None) -> dict:
     """Copie les éléments vers `sink` (ou vers le dossier `dest`). `on_chunk(n)` reçoit les octets copiés (et peut lever Cancelled)."""
     if sink is None:
         sink = LocalSink(backup_dir_for(dest, inv["meta"]["machine"]))
@@ -159,6 +159,7 @@ def run_backup(items: list, inv: dict, dest: Optional[str] = None, *, sink=None,
             "items": [it.to_dict() for it in items],
             "stats": {k: {kk: vv for kk, vv in v.items() if kk != "errors"} for k, v in summary["items"].items()},
         }
+        manifest.update(extra_manifest or {})
         sink.write_bytes(MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=1).encode("utf-8"))
         if summary["errors"]:
             sink.write_bytes("erreurs.log", ("\n".join(summary["errors"]) + "\n").encode("utf-8"))
@@ -237,6 +238,10 @@ def _restore_files(src_root: str, dest_root: str, overwrite: bool, dry_run: bool
 def run_restore(backup: str, loc: Locations, *, only=(), skip=(), overwrite=False, dry_run=False, interactive=False,
                 input_fn=input, out=print, rules: Optional[list] = None, on_chunk=None) -> dict:
     manifest = load_manifest(backup)
+    if manifest.get("placed"):
+        where = manifest["placed"]
+        raise SinkError(f"Cette migration a déjà été installée directement dans le profil « {where.get('user', '?')} » de {where.get('host', '?')} : "
+                        "il n'y a rien à restaurer depuis ce dossier (il ne contient que le rapport et le script d'installation).")
     items = select_items([Item.from_dict(d) for d in manifest["items"]], only, skip, interactive, input_fn, out)
     # règles données maintenant d'abord (elles priment), puis celles enregistrées avec la sauvegarde
     all_rules = list(rules or []) + [tuple(r) for r in manifest.get("redirects", [])]

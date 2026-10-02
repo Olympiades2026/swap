@@ -965,6 +965,26 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(session.inv["meta"]["user"], "alice")
 
 
+class RemoteCliTests(unittest.TestCase):
+    def test_copy_to_user_of_target_pc(self):
+        from swap.session import Session
+
+        with tempfile.TemporaryDirectory() as t:
+            loc = make_profile(t)
+            target = os.path.join(t, "PC2")
+            os.makedirs(os.path.join(target, "Users", "carol"))
+            hooks = (os.path.join(target, "Users"), lambda d: os.path.join(target, "disque-" + d.upper().rstrip(":")))
+            out = os.path.join(t, "sortie")
+            with mock.patch("swap.cli.Locations.detect", return_value=loc), \
+                    mock.patch("swap.cli.run_scan", side_effect=lambda _loc=None, **kw: run_scan(loc, **kw)), \
+                    mock.patch.object(Session, "_remote_args", return_value=hooks):
+                self.assertEqual(cli.main(["scan", "--out", out]), 0)
+                self.assertEqual(cli.main(["copy", "--out", out, "--host", "PC2", "--to-user", "carol", "-y"]), 0)
+                self.assertEqual(read(os.path.join(target, "Users", "carol", "Documents", "rapport.docx")), "rapport")
+                self.assertEqual(cli.main(["copy", "--out", out, "--host", "PC2", "--to-user", "zoe", "-y"]), 2)   # profil inconnu
+                self.assertEqual(cli.main(["copy", "--out", out, "--to-user", "carol", "-y"]), 2)                   # --host manquant
+
+
 class MiscTests(unittest.TestCase):
     WINGET = (
         "\r-\r\\\r  \rNom                    ID                       Version   Source\r\n"

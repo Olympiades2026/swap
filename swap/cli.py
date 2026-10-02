@@ -115,6 +115,8 @@ def cmd_copy(args) -> int:
     if not chosen:
         print("Rien à copier.")
         return 1
+    if getattr(args, "to_user", None):
+        return _copy_remote(args, inv, chosen)
     try:
         sink = _make_sink(args, inv)
     except SinkError as exc:
@@ -124,6 +126,38 @@ def cmd_copy(args) -> int:
         return _copy_to(args, inv, chosen, sink)
     finally:
         sink.close()
+
+
+def _copy_remote(args, inv, chosen) -> int:
+    """Dépose la sélection directement dans le profil d'un utilisateur du PC cible (\\\\PC\\C$\\Users\\...), sans rien lancer là-bas."""
+    from .session import JobContext, Session
+
+    if not args.host:
+        print("--to-user nécessite --host (nom du PC cible).")
+        return 2
+    session = Session(args.out)
+    session.set_inventory(inv)
+    session.selected = {i.id for i in chosen}
+    session.exclude_text = " ".join(args.exclude or ())
+    session.rules_text = "\n".join(f"{p} = {d}" for p, d in _rules(args))
+    ctx = JobContext()
+    try:
+        print(f"{len(chosen)} élément(s), {human_size(sum(i.size for i in chosen))} → profil « {args.to_user} » de {args.host}")
+        if not args.dry_run and not args.yes and input("Lancer la copie ? [O/n] ").strip().lower() in ("n", "non"):
+            return 1
+        summary = session.send_remote(ctx, args.host, args.to_user, dry_run=args.dry_run, want_hash=args.hash, overwrite=args.overwrite)
+    except SinkError as exc:
+        print(f"\n{exc}")
+        return 2
+    for line in ctx.log:
+        print(" ", line)
+    copied = sum(r.get("copied", 0) for r in summary["items"].values())
+    print(f"\n{copied} fichier(s) copiés dans {summary['placed_in']}" + (" (simulation)" if args.dry_run else ""))
+    for e in summary["errors"][:20]:
+        print("  !", e)
+    if not args.dry_run:
+        print(f"Rapport et script d'installation des applications : {summary['report_dir']}")
+    return 0 if not summary["errors"] else 2
 
 
 def _copy_to(args, inv, chosen, sink) -> int:
@@ -331,6 +365,8 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--dest", help="dossier de destination (disque externe, partage \\\\serveur\\partage...)")
     c.add_argument("--host", help="nom ou adresse du PC cible (connexion directe ; il doit être en mode réception)")
     c.add_argument("--code", help="code affiché par le PC cible en mode réception")
+    c.add_argument("--to-user", help="avec --host (sans --code) : déposer directement dans le profil de cet utilisateur du PC cible, depuis ce poste")
+    c.add_argument("--overwrite", action="store_true", help="avec --to-user : écraser les fichiers déjà présents (défaut : les conserver)")
     c.add_argument("--port", type=int, default=47800, help="port de la connexion directe (défaut : %(default)s)")
     c.add_argument("--out", default=DEFAULT_OUT, help="dossier contenant l'inventaire du scan")
     c.add_argument("--inventory", help="fichier inventaire.json (défaut : celui du scan)")

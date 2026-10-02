@@ -159,7 +159,7 @@ details.adv summary{padding:12px 16px;cursor:pointer;font-weight:600}
 details.adv .body{padding:4px 16px 16px;display:grid;gap:14px}
 
 /* envoi */
-.modes{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.modes{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
 .mode{border:1.5px solid var(--line);border-radius:12px;padding:16px;cursor:pointer;background:var(--surface);display:flex;flex-direction:column;gap:10px}
 .mode:hover{border-color:var(--line-strong)}
 .mode.sel{border-color:var(--accent);background:var(--accent-soft)}
@@ -339,9 +339,19 @@ dialog .dh{padding:20px 22px 6px} dialog .db{padding:6px 22px 18px} dialog .df{p
   <section class="panel" id="p3">
     <div class="card">
       <h2>Où envoyer ?</h2>
-      <p class="lead">Choisissez comment les données arrivent sur le PC cible.</p>
+      <p class="lead">Choisissez comment les données arrivent sur le PC cible. Le plus simple : <b>directement sur le PC cible</b>, tout se fait depuis ce poste.</p>
       <div class="modes" id="modes">
-        <div class="mode sel" data-mode="direct">
+        <div class="mode sel" data-mode="remote">
+          <div class="mh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h12M12 7l5 5-5 5"/><rect x="17" y="4" width="4" height="16" rx="1.5"/></svg>
+            <div><h3>Directement sur le PC cible <span class="badge soft">tout depuis ce poste</span></h3><p class="hint">Les fichiers sont déposés dans le profil de l'utilisateur du PC cible. Rien à lancer là-bas. Il faut être administrateur sur le PC cible.</p></div></div>
+          <div class="fields">
+            <div><label class="field" for="rUser">Utilisateur du PC cible</label>
+              <div class="row" style="flex-wrap:nowrap"><select id="rUser"><option value="">— cliquez sur « Charger » —</option></select><button class="btn" id="btnRemoteUsers">Charger</button></div>
+              <p class="hint" style="margin-top:6px">Il doit s'être connecté au moins une fois sur le PC cible.</p></div>
+            <label class="switch"><input type="checkbox" id="optOverwrite"> Écraser les fichiers déjà présents</label>
+          </div>
+        </div>
+        <div class="mode" data-mode="direct">
           <div class="mh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
             <div><h3>Connexion directe</h3><p class="hint">Le PC cible affiche un code (étape 4). Envoi chiffré, reprise possible.</p></div></div>
           <div class="fields">
@@ -466,7 +476,7 @@ dialog .dh{padding:20px 22px 6px} dialog .db{padding:6px 22px 18px} dialog .df{p
 const TOKEN = "__TOKEN__";
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
-const S = {state: null, items: [], filter: "", closed: new Set(), mode: "direct", step: 1, since: 0, jobId: 0, handled: 0,
+const S = {state: null, items: [], filter: "", closed: new Set(), mode: "remote", step: 1, since: 0, jobId: 0, handled: 0,
            done: {1: false, 2: false, 3: false, 4: false}, browseTarget: null, bkTimer: null, lost: false};
 
 /* ---------- réseau ---------- */
@@ -640,7 +650,31 @@ document.querySelectorAll(".mode").forEach((m) => m.addEventListener("click", ()
   S.mode = m.dataset.mode;
   document.querySelectorAll(".mode").forEach((x) => x.classList.toggle("sel", x === m));
   renderSendSummary();
+  if (S.mode === "remote" && $("host").value.trim() && $("rUser").options.length <= 1) loadRemoteUsers(true);
 }));
+async function loadRemoteUsers(quiet) {
+  const host = $("host").value.trim();
+  if (!host) { if (!quiet) toast("Saisissez d'abord le nom du PC cible, en haut de la page.", "bad"); return; }
+  const btn = $("btnRemoteUsers"); btn.disabled = true; btn.textContent = "Recherche…";
+  try {
+    const r = await api("remote-users", {host});
+    const want = $("rUser").value || (S.state.inventory && S.state.inventory.user) || "";
+    $("rUser").innerHTML = r.users.map((u) => `<option value="${esc(u.name)}">${esc(u.name)}${u.last_used ? " (utilisé le " + esc(u.last_used) + ")" : ""}</option>`).join("");
+    const match = r.users.find((u) => u.name.toLowerCase() === want.toLowerCase());
+    $("rUser").value = match ? match.name : r.users[0].name;
+    S.remoteHost = host;
+    renderSendSummary();
+    if (!quiet) toast(`${r.users.length} utilisateur(s) trouvé(s) sur ${host}.`, "ok");
+  } catch (e) { if (!quiet) fail(e); else toast(e.message, "bad"); }
+  btn.disabled = false; btn.textContent = "Charger";
+}
+$("btnRemoteUsers").addEventListener("click", () => loadRemoteUsers(false));
+$("rUser").addEventListener("change", renderSendSummary);
+let hostTimer;
+$("host").addEventListener("input", () => { clearTimeout(hostTimer); hostTimer = setTimeout(() => {
+  if ($("host").value.trim() !== S.remoteHost) $("rUser").innerHTML = '<option value="">— cliquez sur « Charger » —</option>';
+  renderSendSummary();
+}, 400); });
 ["share", "subfolder", "code", "port", "folder"].forEach((id) => $(id).addEventListener("input", renderSendSummary));
 $("code").addEventListener("input", () => {
   const raw = $("code").value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10);
@@ -648,7 +682,8 @@ $("code").addEventListener("input", () => {
 });
 function unc() { return "\\\\" + ($("host").value.trim() || "TPSELxxx") + "\\" + ($("share").value || "C$") + ($("subfolder").value ? "\\" + $("subfolder").value : ""); }
 function whereText() {
-  return S.mode === "direct" ? `le PC ${$("host").value.trim() || "(à saisir)"} · connexion directe`
+  return S.mode === "remote" ? `${$("host").value.trim() || "(PC à saisir)"} · profil ${$("rUser").value || "(à choisir)"}`
+       : S.mode === "direct" ? `le PC ${$("host").value.trim() || "(à saisir)"} · connexion directe`
        : S.mode === "share" ? unc() : ($("folder").value.trim() || "(dossier à choisir)");
 }
 function renderSendSummary() {
@@ -659,7 +694,7 @@ function renderSendSummary() {
 }
 function sendBody() {
   return {mode: S.mode, host: $("host").value, code: $("code").value, port: $("port").value, share: $("share").value, subfolder: $("subfolder").value,
-          folder: $("folder").value, hash: $("optHash").checked, dry: $("optDry").checked, rules: $("rules").value, excludes: $("excl").value};
+          folder: $("folder").value, user: $("rUser").value, overwrite: $("optOverwrite").checked, hash: $("optHash").checked, dry: $("optDry").checked, rules: $("rules").value, excludes: $("excl").value};
 }
 $("btnTest").addEventListener("click", async () => {
   try { $("sendResult").innerHTML = ""; await api("test", sendBody()); S.jobId = 0; S.since = 0; $("sendLog").textContent = ""; poll(true); } catch (e) { fail(e); }
@@ -672,8 +707,11 @@ $("btnSend").addEventListener("click", () => {
   if (dry) return doSend();
   $("confirmKv").innerHTML = `<dt>Éléments</dt><dd>${inv.selected} · ${esc(inv.size_h)}</dd><dt>De</dt><dd>${esc(inv.machine)} (${esc(inv.user || "?")})</dd><dt>Vers</dt><dd>${esc(whereText())}</dd>`;
   const sens = S.items.some((i) => i.selected && i.sensitive);
-  $("confirmWarn").hidden = !sens;
-  $("confirmWarn").textContent = sens ? "🔒 La copie contient des données sensibles (clés SSH, sessions…). Utilisez un support chiffré si possible." : "";
+  const warn = [];
+  if (sens) warn.push("🔒 La copie contient des données sensibles (clés SSH, sessions…).");
+  if (S.mode === "remote") warn.push("Idéalement, l'utilisateur n'est pas connecté sur le PC cible pendant la copie (fichiers verrouillés). Les réglages du registre ne sont pas posés à distance.");
+  $("confirmWarn").hidden = !warn.length;
+  $("confirmWarn").textContent = warn.join(" ");
   $("dlgConfirm").showModal();
 });
 $("cfNo").addEventListener("click", () => $("dlgConfirm").close());
@@ -837,9 +875,12 @@ async function finishJob(j) {
     S.done[3] = !r.dry;
     $("sendResult").innerHTML = `<div class="result ${r.error_count ? "warn" : "ok"}"><h3>${r.dry ? "Simulation terminée" : "✔ Envoi terminé"}</h3>${r.copied} fichier(s) copié(s), ${r.unchanged} déjà à jour`
       + (r.error_count ? `, <b>${r.error_count} non copié(s)</b> (voir le journal)` : "") + `.`
-      + (r.dry ? "" : `<br>Sauvegarde : <span class="mono">${esc(r.backup)}</span><br>Étape suivante, sur le PC cible : « Recevoir / restaurer » (ou <span class="mono">RESTAURER.bat</span> dans le dossier reçu).`)
+      + (r.dry ? "" : r.placed_in ? `<br>Déposé dans <span class="mono">${esc(r.placed_in)}</span>. <b>Rien d'autre à faire sur le PC cible</b> pour les fichiers : l'utilisateur les retrouve à sa prochaine connexion.`
+          + `<br>Pour réinstaller les applications, lancer sur le PC cible : <span class="mono">${esc(r.report_dir)}\\installer_et_configurer.ps1</span>`
+          + (r.skipped_registry.length ? `<br>Non posés à distance (registre) : ${r.skipped_registry.map(esc).join(", ")}.` : "")
+          : `<br>Sauvegarde : <span class="mono">${esc(r.backup)}</span><br>Étape suivante, sur le PC cible : « Recevoir / restaurer » (ou <span class="mono">RESTAURER.bat</span> dans le dossier reçu).`)
       + (r.errors.length ? `<ul>${r.errors.slice(0, 8).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "") + `</div>`;
-    if (!r.dry && S.mode !== "direct") { $("bkPath").value = r.backup; checkBackup(); }
+    if (!r.dry && (S.mode === "share" || S.mode === "folder")) { $("bkPath").value = r.backup; checkBackup(); }
     goStep(3);
   } else if (j.kind === "restore") {
     if (j.cancelled) { $("rsResult").innerHTML = `<div class="result warn"><h3>Restauration annulée</h3>Les fichiers déjà restaurés restent en place.</div>`; return; }
@@ -887,6 +928,7 @@ $("btnQuit").addEventListener("click", async () => {
     renderRx(first.rx);
     if (first.job) { S.jobId = first.job.id; if (!first.job.running) S.handled = first.job.id; }
     renderSendSummary();
+    if ($("host").value.trim()) loadRemoteUsers(true);
     if (st.initial_backup) { $("bkPath").value = st.initial_backup; await checkBackup(); goStep(4); }
     else goStep(st.has_inventory ? 2 : 1);
     poll(true);

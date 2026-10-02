@@ -115,3 +115,41 @@ class LocalSink:
 
     def close(self) -> None:
         pass
+
+
+class PlaceSink(LocalSink):
+    """Dépose chaque élément directement à sa place finale (par ex. dans le profil d'un autre PC), au lieu de faire une sauvegarde.
+
+    `place` : {id de l'élément: (dossier ou fichier final, "dir"/"file")}. Les éléments absents de `place` (rapports, listes de
+    fichiers, installateurs...) vont dans `root`, comme avec LocalSink. Un fichier déjà présent et différent est conservé,
+    sauf avec `overwrite`.
+    """
+
+    def __init__(self, root: str, place: dict, overwrite: bool = False):
+        super().__init__(root)
+        self.place = place
+        self.overwrite = overwrite
+
+    def path(self, rel: str) -> str:
+        parts = rel.split("/")
+        if len(parts) >= 2 and parts[0] == "data" and parts[1] in self.place:
+            final, kind = self.place[parts[1]]
+            return final if kind == "file" or len(parts) == 2 else os.path.join(final, *parts[2:])
+        return super().path(rel)
+
+    def makedirs(self, rel: str) -> None:
+        parts = rel.split("/")
+        if len(parts) >= 2 and parts[0] == "data" and self.place.get(parts[1], ("", ""))[1] == "file":
+            return
+        super().makedirs(rel)
+
+    def put_file(self, rel: str, src: str, size: int, mtime: float, want_hash: bool = False,
+                 on_chunk: Optional[Callable[[int], None]] = None) -> tuple:
+        parts = rel.split("/")
+        placed = len(parts) >= 2 and parts[0] == "data" and parts[1] in self.place
+        dest = self.path(rel)
+        if placed and not self.overwrite and os.path.exists(long_path(dest)) and not is_current(dest, size, mtime):
+            if on_chunk:
+                on_chunk(size)
+            return "unchanged", None   # déjà là et différent : on ne touche pas
+        return super().put_file(rel, src, size, mtime, want_hash, on_chunk)

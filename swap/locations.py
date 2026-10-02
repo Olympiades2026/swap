@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -74,10 +75,11 @@ def users_dir() -> str:
     return "/home"
 
 
-def list_profiles(base: str = "") -> list:
+def list_profiles(base: str = "", connected: bool = True) -> list:
     """Profils utilisateurs présents sur ce poste, le compte connecté en premier puis du plus récent au plus ancien.
 
     Chaque entrée : {name, path, current, last_used ('AAAA-MM-JJ' ou '')}.
+    `connected=False` : on liste les profils d'un AUTRE poste (`base` = \\\\PC\\C$\\Users) : aucun n'est « le compte connecté ».
     """
     base = base or users_dir()
     mine = os.path.expanduser("~")
@@ -98,8 +100,8 @@ def list_profiles(base: str = "") -> list:
             last = datetime.fromtimestamp(stamp).strftime("%Y-%m-%d")
         except OSError:
             stamp, last = 0.0, ""
-        profiles.append({"name": name, "path": path, "current": _same_path(path, mine), "last_used": last, "_t": stamp})
-    if not any(p["current"] for p in profiles) and os.path.isdir(mine):
+        profiles.append({"name": name, "path": path, "current": connected and _same_path(path, mine), "last_used": last, "_t": stamp})
+    if connected and not any(p["current"] for p in profiles) and os.path.isdir(mine):
         # profil du compte connecté hors du dossier des profils (redirigé, autre disque...) : il doit toujours être proposé
         profiles.append({"name": os.path.basename(mine.rstrip("\\/")), "path": mine, "current": True,
                          "last_used": datetime.now().strftime("%Y-%m-%d"), "_t": float("inf")})
@@ -170,6 +172,18 @@ class Locations:
             known[name] = known[name] or plain
         return cls(home, appdata, local, known, current=False)
 
+    @classmethod
+    def for_remote(cls, host: str, user: str, users_base: str = "", drive_root=None) -> "RemoteLocations":
+        """Profil `user` d'un AUTRE poste, atteint par ses partages d'administration (\\\\PC\\C$...).
+
+        `users_base` et `drive_root` ne servent qu'aux tests (valeurs par défaut : \\\\PC\\C$\\Users et \\\\PC\\X$)."""
+        root = drive_root or (lambda drive: "\\\\" + host.strip().strip("\\") + "\\" + drive.upper().rstrip(":") + "$")
+        base = users_base or os.path.join(root("C"), "Users")
+        home = os.path.join(base, user)
+        base_loc = cls.for_profile(home)
+        return RemoteLocations(home, os.path.join(home, "AppData", "Roaming"), os.path.join(home, "AppData", "Local"),
+                               base_loc.known, current=False, host=host, drive_root=root)
+
     def onedrive_roots(self) -> list:
         roots = []
         for var in ("OneDrive", "OneDriveCommercial", "OneDriveConsumer") if self.current else ():
@@ -223,3 +237,27 @@ class Locations:
                 return os.path.join(self.home, "Migration_" + drive.rstrip(":"), tail)
             return path
         raise ValueError(f"cible inconnue : {target!r}")
+
+
+@dataclass
+class RemoteLocations(Locations):
+    """Emplacements sur un autre poste : les chemins « C:\\Mes Projets » deviennent « \\\\PC\\C$\\Mes Projets »."""
+
+    host: str = ""
+    drive_root: object = None  # fonction lettre de lecteur -> racine accessible depuis ce poste
+
+    def remote_path(self, path: str) -> str:
+        """Chemin d'un lecteur du poste distant tel qu'on l'atteint d'ici. Les chemins sans lecteur sont rangés sous le profil."""
+        path = (path or "").strip()
+        if path.startswith("\\\\"):
+            return path
+        m = re.match(r"^([A-Za-z]):[\\/]*(.*)$", path)
+        if not m:
+            return os.path.join(self.home, path) if path else self.home
+        rest = [part for part in re.split(r"[\\/]+", m.group(2)) if part]
+        return os.path.join(self.drive_root(m.group(1)), *rest)
+
+    def resolve(self, target: dict) -> str:
+        if target.get("kind") == "abs":
+            return self.remote_path(target["path"])
+        return super().resolve(target)

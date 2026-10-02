@@ -220,7 +220,8 @@ class WebApp:
             items = res["items"].values()
             return {"copied": sum(r.get("copied", 0) for r in items), "unchanged": sum(r.get("unchanged", 0) for r in items),
                     "errors": res["errors"][:50], "error_count": len(res["errors"]), "backup": res["backup"], "dry": self.job_dry,
-                    "bytes": sum(r.get("bytes", 0) for r in items)}
+                    "bytes": sum(r.get("bytes", 0) for r in items), "placed_in": res.get("placed_in", ""),
+                    "report_dir": res.get("report_dir", ""), "skipped_registry": res.get("skipped_registry", [])}
         if kind == "restore":
             return {"items": [{"id": k, "restored": v["restored"], "skipped": v["skipped"], "errors": v["errors"][:5], "dest": v.get("dest", "")}
                               for k, v in res["items"].items()], "errors": res["errors"][:30], "error_count": len(res["errors"])}
@@ -233,12 +234,15 @@ class WebApp:
         host, folder = (p.get("host") or "").strip(), (p.get("folder") or "").strip()
         kw = dict(host=host, code=p.get("code") or "", port=_int(p.get("port"), net.DEFAULT_PORT, "port"), folder=folder,
                   share=(p.get("share") or "C$").strip() or "C$", subfolder=(p.get("subfolder") or "SWAP").strip())
-        if mode not in ("direct", "share", "folder"):
+        kw["user"] = (p.get("user") or "").strip()
+        if mode not in ("remote", "direct", "share", "folder"):
             raise ApiError("Mode d'envoi inconnu.")
         if mode == "folder" and not folder:
             raise ApiError("Choisissez le dossier ou le disque de destination.")
-        if mode in ("direct", "share") and not host:
+        if mode in ("remote", "direct", "share") and not host:
             raise ApiError("Saisissez le nom (ou l'adresse) du PC cible, en haut de la page.")
+        if mode == "remote" and not kw["user"]:
+            raise ApiError("Choisissez l'utilisateur du PC cible dans lequel déposer les données (bouton « Charger les utilisateurs »).")
         if mode == "direct" and not net.normalize_code(kw["code"]):
             raise ApiError("Saisissez le code affiché sur le PC cible (étape « Recevoir »).")
         return mode, kw
@@ -259,6 +263,15 @@ class WebApp:
         dry, want_hash = bool(p.get("dry")), bool(p.get("hash"))
         self.job_dry = dry
 
+        overwrite = bool(p.get("overwrite"))
+
+        def work_remote(ctx):
+            ctx.progress("Connexion au PC cible...")
+            summary = s.send_remote(ctx, kw["host"], kw["user"], dry_run=dry, want_hash=want_hash, overwrite=overwrite)
+            for line in summary["errors"][:50]:
+                ctx.say(f"⚠ {line}")
+            return summary
+
         def work(ctx):
             ctx.progress("Connexion...")
             sink = s.open_sink(mode, **kw)
@@ -268,8 +281,16 @@ class WebApp:
                 ctx.say(f"⚠ {line}")
             return summary
 
-        self._start("send", work)
+        self._start("send", work_remote if mode == "remote" else work)
         return {"started": True}
+
+    def api_remote_users(self, p) -> dict:
+        """Profils du PC cible (étape « Envoyer » > directement sur le PC cible)."""
+        host = (p.get("host") or "").strip()
+        if not host:
+            raise ApiError("Saisissez le nom (ou l'adresse) du PC cible, en haut de la page.")
+        users = self.session.remote_users(host)
+        return {"users": [{"name": u["name"], "last_used": u["last_used"]} for u in users]}
 
     # ------------------------------------------------------------------------------------------------------------
     # réception (PC cible)
