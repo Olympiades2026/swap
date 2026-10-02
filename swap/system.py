@@ -181,16 +181,18 @@ def stored_credentials() -> list:
     return targets
 
 
-def collect_all(appdata: str) -> dict:
+def collect_all(appdata: str, current_user: bool = True) -> dict:
+    """`current_user=False` : on analyse le profil d'un autre compte ; ce qui dépend de la session connectée
+    (lecteurs réseau, variables, certificats, identifiants) n'est alors pas lisible et reste vide."""
     return {
         "printers": printers(),
-        "drives": mapped_drives(),
+        "drives": mapped_drives() if current_user else [],
         "wifi": wifi_profiles(),
         "startup": startup(appdata),
         "tasks": scheduled_tasks(),
-        "odbc": odbc_sources(),
-        "env": env_vars(),
+        "odbc": odbc_sources() if current_user else [s for s in odbc_sources() if s["scope"] == "machine"],
+        "env": env_vars() if current_user else {},
         "hosts": hosts_entries() if is_windows() else [],
-        "certificates": personal_certificates(),
-        "credentials": stored_credentials(),
+        "certificates": personal_certificates() if current_user else [],
+        "credentials": stored_credentials() if current_user else [],
     }
