@@ -102,6 +102,8 @@ class Session:
         self.last_backup = ""
         self.profiles_base = ""  # dossier contenant les profils (défaut : C:\Users)
         self.source_home = ""  # profil à analyser (vide = compte connecté)
+        self.source_host = ""  # PC source distant (vide = ce poste)
+        self.source_user = ""  # utilisateur du PC source distant
         self.target_home = ""  # profil dans lequel restaurer (vide = compte connecté)
         self.remote_users_base = None  # tests : fonction hôte -> dossier des profils ; défaut \\\\hôte\\C$\\Users
         self.remote_drive_root = None  # tests : fonction (hôte, lecteur) -> racine ; défaut \\\\hôte\\X$
@@ -111,7 +113,23 @@ class Session:
     def profiles(self) -> list:
         return list_profiles(self.profiles_base)
 
+    def set_source(self, host: str = "", user: str = "", home: str = "") -> None:
+        """PC source : ce poste (host vide ou égal au nom de ce poste) avec le profil `home`, ou un autre PC et son utilisateur."""
+        host = (host or "").strip()
+        local = platform.node().lower()
+        if host and host.lower() not in (local, local.split(".")[0]):
+            self.source_host, self.source_user, self.source_home = host, (user or "").strip(), ""
+        else:
+            self.source_host = self.source_user = ""
+            self.source_home = home
+
     def source_loc(self) -> Locations:
+        if self.source_host:
+            if not self.source_user:
+                raise SinkError("Choisissez l'utilisateur du PC source (bouton « Charger »).")
+            if self.source_user not in [p["name"] for p in self.remote_users(self.source_host)]:
+                raise SinkError(f"Le profil « {self.source_user} » n'existe pas sur {self.source_host}.")
+            return self.remote_locations(self.source_host, self.source_user)
         return Locations.for_profile(self.source_home) if self.source_home else (self.loc or Locations.detect())
 
     def target_loc(self) -> Locations:

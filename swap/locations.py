@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -202,6 +203,24 @@ class Locations:
     def in_onedrive(self, path: str) -> bool:
         return any(is_under(path, root) for root in self.onedrive_roots())
 
+    # -- spécifique à l'analyse d'un autre poste (identité pour le poste local) ----------------------------------------
+    remote = False
+
+    def local_path(self, path: str) -> str:
+        """Chemin tel qu'il s'écrit SUR le poste analysé (« C:\\Projets »), même si on le lit ici par \\\\PC\\C$\\Projets."""
+        return path
+
+    def abs_target(self, path: str) -> dict:
+        return {"kind": "abs", "path": self.local_path(path)}
+
+    def drives(self):
+        """Racines des disques à parcourir ; None = les disques fixes de ce poste."""
+        return None
+
+    @property
+    def programdata(self) -> str:
+        return os.environ.get("ProgramData", r"C:\ProgramData")
+
     def target_for(self, path: str) -> dict:
         """Décrit `path` de façon portable (relatif à Documents, au profil...) pour le retrouver sur un autre poste."""
         best = None
@@ -245,6 +264,45 @@ class RemoteLocations(Locations):
 
     host: str = ""
     drive_root: object = None  # fonction lettre de lecteur -> racine accessible depuis ce poste
+    remote = True
+
+    def drive_letter(self, path: str) -> str:
+        for letter in "CDEFGHIJKLMNOPQRSTUVWXYZAB":
+            if is_under(path, self.drive_root(letter)):
+                return letter
+        return ""
+
+    def local_path(self, path: str) -> str:
+        letter = self.drive_letter(path)
+        if not letter:
+            return path
+        rel = os.path.relpath(path, self.drive_root(letter))
+        return f"{letter}:\\" + ("" if rel == "." else rel.replace("/", "\\"))
+
+    def drives(self) -> list:
+        """Disques du poste distant atteignables par leur partage d'administration (C$, D$...), testés en parallèle."""
+        found: dict = {}
+
+        def probe(letter: str) -> None:
+            if os.path.isdir(self.drive_root(letter) + os.sep):
+                found[letter] = self.drive_root(letter)
+
+        threads = [threading.Thread(target=probe, args=(c,), daemon=True) for c in "CDEFGHIJKLMNOPQRSTUVWXYZ"]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(8)
+        return [found[c] for c in sorted(found)]
+
+    @property
+    def programdata(self) -> str:
+        return os.path.join(self.drive_root("C"), "ProgramData")
+
+    def target_for(self, path: str) -> dict:
+        target = super().target_for(path)
+        if target["kind"] == "abs":
+            target["path"] = self.local_path(target["path"])
+        return target
 
     def remote_path(self, path: str) -> str:
         """Chemin d'un lecteur du poste distant tel qu'on l'atteint d'ici. Les chemins sans lecteur sont rangés sous le profil."""

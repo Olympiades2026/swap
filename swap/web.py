@@ -7,11 +7,14 @@ Rien à installer : bibliothèque standard uniquement. Le serveur n'écoute QUE 
 
 from __future__ import annotations
 
+import hmac
+import html
 import json
 import os
 import platform
 import queue
 import secrets
+import ssl
 import subprocess
 import sys
 import threading
@@ -48,8 +51,9 @@ def _int(value, default: int, name: str = "valeur") -> int:
 class WebApp:
     """État et actions de l'interface. Chaque méthode publique `api_*` reçoit un dict JSON et renvoie un dict JSON."""
 
-    def __init__(self, session: Optional[Session] = None, backup: Optional[str] = None):
+    def __init__(self, session: Optional[Session] = None, backup: Optional[str] = None, server: bool = False):
         self.session = session or Session(os.path.abspath("swap-sortie"))
+        self.server_mode = server   # hébergé sur un serveur : le PC source et le PC cible sont toujours d'AUTRES postes
         self.initial_backup = os.path.normpath(backup) if backup else ""
         self.lock = threading.RLock()
         self.job: Optional[Job] = None
@@ -88,7 +92,8 @@ class WebApp:
             "version": __version__, "machine": platform.node(), "windows": is_windows(), "out_dir": os.path.abspath(s.out_dir),
             "profiles": profiles, "source": chosen["path"] if chosen else "", "source_is_current": not s.source_home,
             "rules": s.rules_text, "excludes": s.exclude_text, "last_backup": s.last_backup, "initial_backup": self.initial_backup,
-            "has_inventory": bool(s.inv), "inventory": None,
+            "has_inventory": bool(s.inv), "inventory": None, "server": self.server_mode,
+            "source_host": s.source_host, "source_user": s.source_user,
             "default_rx_dest": "C:\\SWAP" if is_windows() else os.path.expanduser("~/SWAP"), "port": net.DEFAULT_PORT,
         }
         if s.inv:
@@ -121,10 +126,15 @@ class WebApp:
         return {"profiles": self._profile_rows()}
 
     def api_set_source(self, p) -> dict:
+        """PC source : `source_host` (vide = ce poste) + `source_user` pour un autre PC, ou `path` = profil de ce poste."""
         path = (p.get("path") or "").strip()
         prof = next((x for x in self.session.profiles() if x["path"] == path), None)
-        self.session.source_home = "" if (prof is None or prof["current"]) else prof["path"]
-        return {"source_is_current": not self.session.source_home}
+        home = "" if (prof is None or prof["current"]) else prof["path"]
+        host = (p.get("source_host") or "").strip()
+        if self.server_mode and not host:
+            raise ApiError("Saisissez le nom du PC source.")
+        self.session.set_source(host, p.get("source_user") or "", home)
+        return {"source_is_current": not (self.session.source_home or self.session.source_host)}
 
     def api_scan(self, p) -> dict:
         self.api_set_source(p)
@@ -285,7 +295,7 @@ class WebApp:
         return {"started": True}
 
     def api_remote_users(self, p) -> dict:
-        """Profils du PC cible (étape « Envoyer » > directement sur le PC cible)."""
+        """Profils d'un autre PC (PC source ou PC cible), lus par \\\\PC\\C$\\Users."""
         host = (p.get("host") or "").strip()
         if not host:
             raise ApiError("Saisissez le nom (ou l'adresse) du PC cible, en haut de la page.")
@@ -456,12 +466,33 @@ class WebApp:
 
 # ----------------------------------------------------------------------------------------------------------------
 # HTTP
+LOGIN_PAGE = """<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>swap — connexion</title><style>
+:root{color-scheme:light dark;--bg:#f4f5f8;--card:#fff;--ink:#141922;--muted:#5b6575;--line:#cdd2db;--accent:#4f46e5;--bad:#b42318}
+@media(prefers-color-scheme:dark){:root{--bg:#0e1116;--card:#171b23;--ink:#e9ecf2;--muted:#9aa4b5;--line:#3a4252;--accent:#818cf8;--bad:#f87171}}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,"Segoe UI",sans-serif}
+form{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px;width:min(360px,calc(100vw - 32px))}
+h1{margin:0 0 4px;font-size:20px}p{margin:0 0 16px;color:var(--muted)}label{display:block;font-weight:600;font-size:13px;margin-bottom:5px}
+input{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:transparent;color:inherit;font:inherit}
+button{margin-top:14px;width:100%;padding:11px;border:0;border-radius:10px;background:var(--accent);color:#fff;font:inherit;font-weight:600;cursor:pointer}
+.err{color:var(--bad);margin-top:12px}</style></head><body><form method="post" action="/login">
+<h1>swap</h1><p>Migration de poste. Mot de passe requis.</p><label for="p">Mot de passe</label>
+<input id="p" name="password" type="password" autofocus autocomplete="current-password"><button>Se connecter</button>__MSG__</form></body></html>"""
+
+COOKIE = "swap_session"
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "swap"
     protocol_version = "HTTP/1.1"
+    # renseignés pour chaque serveur par make_server (sous-classe dédiée)
     app: WebApp
-    token: str
-    hosts: set
+    token: str = ""
+    hosts: set = set()
+    password: Optional[str] = None      # mode serveur : mot de passe exigé
+    sessions: set = set()
+    fails: dict = {}
+    secure_cookie = False
 
     def log_message(self, *_a) -> None:  # silence
         pass
@@ -474,6 +505,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Frame-Options", "DENY")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -483,13 +515,46 @@ class Handler(BaseHTTPRequestHandler):
         self._send(status, json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     def _host_ok(self) -> bool:
-        if self.headers.get("Host", "") not in self.hosts:  # contre le « DNS rebinding »
-            return False
+        host = self.headers.get("Host", "")
         origin = self.headers.get("Origin")
+        if self.password is not None:   # mode serveur : le mot de passe protège ; on exige seulement une origine identique
+            return origin is None or origin.split("//", 1)[-1] == host
+        if host not in self.hosts:      # contre le « DNS rebinding »
+            return False
         return origin is None or origin.split("//", 1)[-1] in self.hosts
 
     def _query(self) -> dict:
         return {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+
+    def _cookie(self) -> str:
+        for part in self.headers.get("Cookie", "").split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == COOKIE:
+                return value
+        return ""
+
+    def _authed(self) -> bool:
+        return self.password is None or self._cookie() in self.sessions
+
+    def _login(self) -> None:
+        ip = self.client_address[0]
+        count, until = self.fails.get(ip, (0, 0.0))
+        if until > time.monotonic():
+            return self._send(429, LOGIN_PAGE.replace("__MSG__", '<p class="err">Trop d\'essais : patientez une minute.</p>').encode("utf-8"),
+                              "text/html; charset=utf-8")
+        length = min(int(self.headers.get("Content-Length") or 0), 4096)
+        form = parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
+        given = (form.get("password") or [""])[0]
+        if hmac.compare_digest(given.encode("utf-8"), self.password.encode("utf-8")):
+            self.fails.pop(ip, None)
+            sid = secrets.token_urlsafe(24)
+            self.sessions.add(sid)
+            flags = "; HttpOnly; SameSite=Strict; Path=/" + ("; Secure" if self.secure_cookie else "")
+            return self._send(303, b"", "text/plain", {"Location": "/", "Set-Cookie": f"{COOKIE}={sid}{flags}"})
+        count += 1
+        self.fails[ip] = (count, time.monotonic() + 60 if count >= 5 else 0.0)
+        time.sleep(1)   # ralentit les essais de mots de passe
+        self._send(401, LOGIN_PAGE.replace("__MSG__", '<p class="err">Mot de passe incorrect.</p>').encode("utf-8"), "text/html; charset=utf-8")
 
     # -- routes ------------------------------------------------------------------------------------------------
     def do_GET(self) -> None:
@@ -504,14 +569,25 @@ class Handler(BaseHTTPRequestHandler):
         self.app.touch()
         path, query = urlparse(self.path).path, self._query()
         try:
+            if self.password is not None:
+                if method == "POST" and path == "/login":
+                    return self._login()
+                if path == "/logout":
+                    self.sessions.discard(self._cookie())
+                    return self._send(303, b"", "text/plain", {"Location": "/", "Set-Cookie": f"{COOKIE}=; Max-Age=0; Path=/"})
+                if not self._authed():
+                    if path.startswith("/api/"):
+                        return self._json(401, {"error": "Session expirée : rechargez la page."})
+                    return self._send(200, LOGIN_PAGE.replace("__MSG__", "").encode("utf-8"), "text/html; charset=utf-8")
+            allowed = self.password is not None or query.get("t") == self.token
             if method == "GET" and path == "/":
-                if query.get("t") != self.token:
+                if not allowed:
                     return self._send(403, "Adresse incomplète : ouvrez l'adresse affichée par swap.".encode("utf-8"), "text/plain; charset=utf-8")
                 with open(INDEX, encoding="utf-8") as fh:
-                    html = fh.read().replace("__TOKEN__", self.token)
-                return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
+                    page = fh.read().replace("__TOKEN__", self.token)
+                return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
             if method == "GET" and path in ("/report", "/backup-report"):
-                if query.get("t") != self.token:
+                if not (allowed and (self.password is not None or query.get("t") == self.token)):
                     return self._send(403, b"", "text/plain")
                 file = self.app.report_file(query.get("path", "") if path == "/backup-report" else "")
                 if not file:
@@ -525,6 +601,8 @@ class Handler(BaseHTTPRequestHandler):
             fn = getattr(self.app, "api_" + path[5:].replace("-", "_"), None)
             if fn is None:
                 return self._json(404, {"error": "Action inconnue."})
+            if path == "/api/quit" and self.app.server_mode:
+                return self._json(403, {"error": "Le serveur ne s'arrête pas depuis la page."})
             payload = dict(query)
             if method == "POST":
                 length = int(self.headers.get("Content-Length") or 0)
@@ -556,13 +634,21 @@ class _Server(ThreadingHTTPServer):
     allow_reuse_address = False
 
 
-def make_server(app: WebApp, port: int = 0) -> tuple:
-    """Crée le serveur (127.0.0.1 seulement) ; renvoie (serveur, jeton)."""
+def make_server(app: WebApp, port: int = 0, listen: str = "127.0.0.1", password: Optional[str] = None,
+                certfile: str = "", keyfile: str = "") -> tuple:
+    """Crée le serveur ; renvoie (serveur, jeton). Hors 127.0.0.1, un mot de passe est obligatoire (refus sinon)."""
+    if listen not in ("127.0.0.1", "localhost", "::1") and not password:
+        raise ValueError("Un mot de passe est obligatoire pour écouter ailleurs que sur ce poste.")
     token = secrets.token_urlsafe(18)
-    server = _Server(("127.0.0.1", port), Handler)
+    server = _Server((listen, port), None)
     real = server.server_address[1]
-    Handler.app, Handler.token = app, token
-    Handler.hosts = {f"127.0.0.1:{real}", f"localhost:{real}"}
+    server.RequestHandlerClass = type("SwapHandler", (Handler,), {
+        "app": app, "token": token, "hosts": {f"127.0.0.1:{real}", f"localhost:{real}"}, "password": password or None,
+        "sessions": set(), "fails": {}, "secure_cookie": bool(certfile)})
+    if certfile:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(certfile, keyfile or None)
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
     return server, token
 
 
@@ -579,30 +665,50 @@ def open_window(url: str) -> None:
     webbrowser.open(url)
 
 
-def run(out_dir: Optional[str] = None, backup: Optional[str] = None, port: int = 0, browser: bool = True, idle: int = 300) -> int:
-    """Lance l'interface web. S'arrête avec le bouton « Quitter », Ctrl+C, ou après `idle` secondes sans activité (0 = jamais)."""
+def run(out_dir: Optional[str] = None, backup: Optional[str] = None, port: int = 0, browser: bool = True, idle: int = 300,
+        listen: str = "127.0.0.1", password: Optional[str] = None, certfile: str = "", keyfile: str = "", server: bool = False,
+        firewall: bool = False) -> int:
+    """Lance l'interface web.
+
+    Poste local : s'arrête avec « Quitter », Ctrl+C, ou après `idle` secondes sans activité (0 = jamais).
+    `server=True` : hébergée sur un serveur, protégée par mot de passe, ne s'arrête jamais toute seule ; le PC source et
+    le PC cible sont toujours d'autres postes."""
     if sys.stdout is None:  # pythonw : pas de console
         sys.stdout = sys.stderr = open(os.devnull, "w")
-    app = WebApp(Session(out_dir) if out_dir else None, backup)
+    app = WebApp(Session(out_dir) if out_dir else None, backup, server=server)
     try:
-        server, token = make_server(app, port)
-    except OSError as exc:
+        httpd, token = make_server(app, port, listen, password, certfile, keyfile)
+    except (OSError, ValueError, ssl.SSLError) as exc:
         print(f"Impossible de démarrer l'interface web : {exc}")
         return 1
-    url = f"http://127.0.0.1:{server.server_address[1]}/?t={token}"
-    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.2}, daemon=True).start()
-    print(f"swap {__version__} — interface web : {url}\nFermez cette page puis le bouton « Quitter » (ou Ctrl+C) pour arrêter.")
-    if browser:
-        open_window(url)
+    real = httpd.server_address[1]
+    opened_fw = False
+    if server and firewall:
+        opened_fw, msg = net.firewall_open(real)
+        print("Pare-feu : port ouvert." if opened_fw else f"Pare-feu : impossible d'ouvrir le port ({msg or 'droits administrateur requis'}).")
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.2}, daemon=True).start()
+    if server:
+        scheme = "https" if certfile else "http"
+        print(f"swap {__version__} — serveur de migration : {scheme}://{platform.node()}:{real}/  (écoute sur {listen})")
+        if not certfile:
+            print("ATTENTION : sans --cert/--key, le mot de passe circule en clair sur le réseau (HTTP). Réseau interne uniquement.")
+        print("Le compte Windows qui lance ce serveur doit être administrateur des PC source et cible. Ctrl+C pour arrêter.")
+    else:
+        url = f"http://127.0.0.1:{real}/?t={token}"
+        print(f"swap {__version__} — interface web : {url}\nFermez cette page puis le bouton « Quitter » (ou Ctrl+C) pour arrêter.")
+        if browser:
+            open_window(url)
     try:
         while not app.quit_event.wait(1.0):
-            if idle and not app.busy() and time.monotonic() - app.last_activity > idle:
+            if not server and idle and not app.busy() and time.monotonic() - app.last_activity > idle:
                 print("Inactif : arrêt de swap.")
                 break
     except KeyboardInterrupt:
         pass
     finally:
         app._rx_stop()
-        server.shutdown()
-        server.server_close()
+        if opened_fw:
+            net.firewall_close(real)
+        httpd.shutdown()
+        httpd.server_close()
     return 0

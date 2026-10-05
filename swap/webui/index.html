@@ -233,15 +233,17 @@ dialog .dh{padding:20px 22px 6px} dialog .db{padding:6px 22px 18px} dialog .df{p
   <div class="spacer"></div>
   <span class="ver" id="ver"></span>
   <button class="btn ghost" id="btnQuit" title="Arrêter swap">Quitter</button>
+  <a class="btn ghost" id="lnkLogout" href="/logout" hidden>Se déconnecter</a>
 </header>
 
 <main class="wrap">
   <section class="card route" aria-label="Trajet de la migration">
     <div class="end">
-      <span class="eyebrow">PC source · ce poste</span>
-      <div class="machine" id="srcMachine">…</div>
+      <span class="eyebrow" id="srcEyebrow">PC source · ce poste</span>
+      <input type="text" id="srcHost" class="target-input" placeholder="TPSEL023" autocomplete="off" spellcheck="false" aria-label="Nom du PC source">
+      <p class="hint" id="srcHint" style="margin:6px 0 10px">Laissez le nom de ce poste pour migrer ce PC, ou saisissez un autre PC pour le lire à distance.</p>
       <label class="field" for="srcUser">Utilisateur à migrer</label>
-      <select id="srcUser"></select>
+      <div class="row" style="flex-wrap:nowrap"><select id="srcUser"></select><button class="btn" id="btnSrcUsers">Charger</button></div>
       <div class="note-warn" id="srcNote" hidden></div>
     </div>
     <div class="arrow" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 24h30M28 13l11 11-11 11"/></svg></div>
@@ -262,7 +264,7 @@ dialog .dh{padding:20px 22px 6px} dialog .db{padding:6px 22px 18px} dialog .df{p
   <!-- 1. ANALYSER -->
   <section class="panel" id="p1">
     <div class="card">
-      <h2>Analyser le poste</h2>
+      <h2>Analyser le PC source</h2>
       <p class="lead">swap parcourt le poste (dossiers, applications, imprimantes, lecteurs réseau, certificats…) et prépare la liste de tout ce qui doit être migré. Cette étape ne modifie rien : elle lit seulement.</p>
       <div class="row">
         <button class="btn primary big needs-idle" id="btnScan">Analyser ce poste</button>
@@ -525,11 +527,12 @@ async function loadState() {
   const st = await api("state");
   S.state = st;
   $("ver").textContent = "v" + st.version;
-  $("srcMachine").textContent = st.machine;
-  fillProfiles($("srcUser"), st.profiles, st.source);
+  if (!$("srcHost").dataset.touched) $("srcHost").value = st.source_host || (st.server ? "" : st.machine);
   fillProfiles($("tgtUser"), st.profiles, null);
-  $("srcNote").hidden = st.source_is_current;
-  $("srcNote").textContent = st.source_is_current ? "" : "Profil d'un autre compte (droits administrateur requis) : registre, lecteurs réseau, certificats et identifiants ne sont pas lisibles.";
+  if (!srcIsRemote()) fillProfiles($("srcUser"), st.profiles, st.source);
+  else if (!$("srcUser").options.length && st.source_user) $("srcUser").innerHTML = `<option value="${esc(st.source_user)}">${esc(st.source_user)}</option>`;
+  applyServerMode(st);
+  syncSrcNote();
   if (!$("rules").dataset.touched) $("rules").value = st.rules || "";
   if (!$("excl").dataset.touched) $("excl").value = st.excludes || "";
   if (!$("rxDest").value) $("rxDest").value = st.default_rx_dest;
@@ -539,6 +542,49 @@ async function loadState() {
   renderInventory();
   return st;
 }
+function srcIsRemote() {
+  const h = $("srcHost").value.trim().toLowerCase();
+  const me = (S.state ? S.state.machine : "").toLowerCase();
+  return !!h && h !== me && h !== me.split(".")[0];
+}
+function syncSrcNote() {
+  const note = $("srcNote");
+  if (srcIsRemote()) { note.hidden = false; note.textContent = "Lecture à distance par le réseau (droits administrateur sur ce PC requis). Applications lues si le registre distant ou WinRM le permet ; imprimantes, lecteurs réseau et certificats ne sont pas lisibles."; }
+  else if (S.state && !S.state.source_is_current) { note.hidden = false; note.textContent = "Profil d'un autre compte (droits administrateur requis) : registre, lecteurs réseau, certificats et identifiants ne sont pas lisibles."; }
+  else note.hidden = true;
+  $("srcEyebrow").textContent = srcIsRemote() || (S.state && S.state.server) ? "PC source" : "PC source · ce poste";
+  $("btnSrcUsers").hidden = !srcIsRemote();
+}
+function applyServerMode(st) {
+  if (!st.server) return;
+  $("btnQuit").hidden = true; $("lnkLogout").hidden = false;
+  document.querySelector('.step[data-step="4"]').hidden = true;
+  document.querySelector('.mode[data-mode="direct"]').hidden = true;
+  $("srcHint").textContent = "Nom du PC à migrer (ex. TPSEL023). Cliquez sur « Charger » pour choisir son utilisateur.";
+  document.querySelector('.steps').style.gridTemplateColumns = "repeat(3,1fr)";
+}
+async function refreshSourceUsers(quiet) {
+  if (!srcIsRemote()) {
+    if (S.state) fillProfiles($("srcUser"), S.state.profiles, S.state.source);
+    await api("set-source", {path: $("srcUser").value, source_host: ""}).catch(() => {}); syncSrcNote(); return;
+  }
+  const btn = $("btnSrcUsers"); btn.disabled = true; btn.textContent = "Recherche…";
+  try {
+    const r = await api("remote-users", {host: $("srcHost").value});
+    const want = $("srcUser").value;
+    $("srcUser").innerHTML = r.users.map((u) => `<option value="${esc(u.name)}">${esc(u.name)}${u.last_used ? " (utilisé le " + esc(u.last_used) + ")" : ""}</option>`).join("");
+    if (r.users.some((u) => u.name === want)) $("srcUser").value = want;
+    await api("set-source", {source_host: $("srcHost").value, source_user: $("srcUser").value});
+    if (!quiet) toast(`${r.users.length} utilisateur(s) trouvé(s) sur ${$("srcHost").value.trim()}.`, "ok");
+  } catch (e) { if (!quiet) fail(e); }
+  btn.disabled = false; btn.textContent = "Charger"; syncSrcNote();
+}
+let srcTimer;
+$("srcHost").addEventListener("input", () => {
+  $("srcHost").dataset.touched = "1"; syncSrcNote();
+  clearTimeout(srcTimer); srcTimer = setTimeout(() => refreshSourceUsers(true), 700);
+});
+$("btnSrcUsers").addEventListener("click", () => refreshSourceUsers(false));
 function fillProfiles(sel, profiles, chosen) {
   const keep = sel.value;
   sel.innerHTML = profiles.map((p) => `<option value="${esc(p.path)}">${esc(p.label)}</option>`).join("");
@@ -560,16 +606,19 @@ function renderInventory() {
 }
 
 $("srcUser").addEventListener("change", async () => {
-  try { const r = await api("set-source", {path: $("srcUser").value}); S.state.source_is_current = r.source_is_current;
-    $("srcNote").hidden = r.source_is_current;
-    $("srcNote").textContent = "Profil d'un autre compte (droits administrateur requis) : registre, lecteurs réseau, certificats et identifiants ne sont pas lisibles."; } catch (e) { fail(e); }
+  try {
+    const r = await api("set-source", srcIsRemote() ? {source_host: $("srcHost").value, source_user: $("srcUser").value} : {path: $("srcUser").value, source_host: ""});
+    S.state.source_is_current = r.source_is_current; syncSrcNote();
+  } catch (e) { fail(e); }
 });
 $("host").value = (() => { try { return localStorage.getItem("swap.host") || ""; } catch (e) { return ""; } })();
 $("host").addEventListener("input", () => { try { localStorage.setItem("swap.host", $("host").value); } catch (e) {} renderSendSummary(); });
 
 /* ---------- 1. analyser ---------- */
 $("btnScan").addEventListener("click", async () => {
-  try { await api("scan", {path: $("srcUser").value}); S.jobId = 0; S.since = 0; $("scanResult").hidden = true; poll(true); } catch (e) { fail(e); }
+  const remote = srcIsRemote();
+  if (S.state.server && !$("srcHost").value.trim()) return toast("Saisissez le nom du PC source.", "bad");
+  try { await api("scan", {path: remote ? "" : $("srcUser").value, source_host: $("srcHost").value, source_user: remote ? $("srcUser").value : ""}); S.jobId = 0; S.since = 0; $("scanResult").hidden = true; poll(true); } catch (e) { fail(e); }
 });
 $("btnScanCancel").addEventListener("click", () => api("cancel", {}).catch(fail));
 $("btnLoadInv").addEventListener("click", () => $("dlgInv").showModal());

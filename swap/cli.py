@@ -295,6 +295,26 @@ def cmd_web(args) -> int:
                getattr(args, "idle", 300))
 
 
+def cmd_server(args) -> int:
+    import getpass
+
+    from .web import run
+
+    password = args.password or os.environ.get("SWAP_PASSWORD") or ""
+    if not password:
+        if not sys.stdin.isatty():
+            print("Indiquez un mot de passe : --password ... ou la variable d'environnement SWAP_PASSWORD.")
+            return 2
+        password = getpass.getpass("Mot de passe de l'interface (à saisir 2 fois) : ")
+        if password != getpass.getpass("Confirmez : "):
+            print("Les deux saisies diffèrent.")
+            return 2
+    if len(password) < 8:
+        print("Mot de passe trop court (8 caractères minimum).")
+        return 2
+    return run(args.out, None, args.port, False, 0, args.listen, password, args.cert or "", args.key or "", True, args.firewall)
+
+
 def cmd_gui(args) -> int:
     try:
         from .gui import run
@@ -349,6 +369,16 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--no-browser", action="store_true", help="ne pas ouvrir le navigateur (affiche seulement l'adresse)")
     w.add_argument("--idle", type=int, default=300, help="s'arrêter après ce nombre de secondes sans page ouverte (0 = jamais ; défaut : %(default)s)")
     w.set_defaults(func=cmd_web)
+
+    sv = sub.add_parser("server", help="héberger swap sur un serveur : on migre un PC source vers un PC cible depuis un navigateur")
+    sv.add_argument("--out", default=os.path.abspath(DEFAULT_OUT), help="dossier de sortie (défaut : %(default)s)")
+    sv.add_argument("--listen", default="0.0.0.0", help="adresse d'écoute (défaut : %(default)s = tout le réseau)")
+    sv.add_argument("--port", type=int, default=8080, help="port HTTP (défaut : %(default)s)")
+    sv.add_argument("--password", help="mot de passe de l'interface (sinon variable SWAP_PASSWORD, sinon demandé)")
+    sv.add_argument("--cert", help="certificat TLS (.pem) pour servir en HTTPS")
+    sv.add_argument("--key", help="clé privée TLS (.pem)")
+    sv.add_argument("--firewall", action="store_true", help="ouvrir le port dans le pare-feu Windows pendant l'exécution (administrateur)")
+    sv.set_defaults(func=cmd_server)
 
     g = sub.add_parser("gui", help="ouvrir l'ancienne interface graphique (fenêtre tkinter)")
     g.add_argument("--out", default=os.path.abspath(DEFAULT_OUT), help="dossier de sortie (défaut : %(default)s)")

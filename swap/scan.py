@@ -46,6 +46,9 @@ def is_reparse(path: str) -> bool:
 
 
 def drive_tag(root: str) -> str:
+    m = re.match(r"^\\\\[^\\]+\\([A-Za-z])\$", root)   # \\PC\C$ (disque d'un autre poste) -> « c »
+    if m:
+        return m.group(1).lower()
     drive = os.path.splitdrive(root)[0].rstrip(":")
     return slugify(drive) if drive else "x"
 
@@ -161,14 +164,14 @@ class _Scanner:
 
     def app_configs(self):
         roots = {"appdata": self.loc.appdata, "localappdata": self.loc.localappdata, "home": self.loc.home,
-                 "programdata": os.environ.get("ProgramData", r"C:\ProgramData")}
+                 "programdata": self.loc.programdata}
         for cfg in APP_CONFIGS:
             for i, (root, rel) in enumerate(cfg.paths):
                 path = os.path.join(roots[root], *rel.split("/"))
                 if not os.path.exists(path):
                     continue
                 suffix = "" if len(cfg.paths) == 1 else f"-{i + 1}"
-                target = {"kind": "abs", "path": path} if root == "programdata" else {"kind": root, "rel": rel}
+                target = self.loc.abs_target(path) if root == "programdata" else {"kind": root, "rel": rel}
                 self.add(f"config-{cfg.id}{suffix}", cfg.label, "dir" if os.path.isdir(path) else "file", path,
                          target, "Configuration des applications", cache=cfg.cache,
                          extra=cfg.extra_excludes, default=cfg.default, sensitive=cfg.sensitive, note=cfg.note)
@@ -210,7 +213,7 @@ class _Scanner:
             if not os.path.isdir(path):
                 continue
             item = self.add(f"garder-{slugify(name)}-{slugify(os.path.basename(path))}", label, "dir", path,
-                            {"kind": "abs", "path": path}, cat, skip_empty=True,
+                            self.loc.abs_target(path), cat, skip_empty=True,
                             note=f"Ce qui vous appartient dans « {name} » (le reste du dossier se réinstalle).")
             if item:
                 parent.exclude_paths.append(path)
@@ -219,12 +222,15 @@ class _Scanner:
 
     def outside_profile(self):
         """Dossiers posés à la racine des disques (C:\\Projets, D:\\Data...) : là où on oublie le plus de choses."""
-        for root in fixed_drives():
+        drives = self.loc.drives()
+        for root in (fixed_drives() if drives is None else drives):
             try:
                 names = sorted(os.listdir(root), key=str.lower)
             except OSError:
                 continue
-            system_drive = os.path.normcase(root).startswith(os.path.normcase(os.environ.get("SystemDrive", "C:")))
+            tag = self.loc.drive_letter(root).lower() if self.loc.remote else drive_tag(root)
+            system_drive = (tag == "c") if self.loc.remote else \
+                os.path.normcase(root).startswith(os.path.normcase(os.environ.get("SystemDrive", "C:")))
             for name in names:
                 path = os.path.join(root, name)
                 if name.lower() in SYSTEM_ROOT_DIRS or name.startswith("$") or not os.path.isdir(path) or is_reparse(path):
@@ -236,8 +242,8 @@ class _Scanner:
                     continue
                 category = "Dossiers hors profil (disque système)" if system_drive else "Autres disques"
                 default, note = self.classify_root(name, path)
-                item = self.add(f"disque-{drive_tag(root)}-{slugify(name)}", path, "dir", path, {"kind": "abs", "path": path},
-                                category, track=True, skip_empty=True, default=default, note=note)
+                item = self.add(f"disque-{tag}-{slugify(name)}", self.loc.local_path(path), "dir", path,
+                                self.loc.abs_target(path), category, track=True, skip_empty=True, default=default, note=note)
                 if item is not None and not default:
                     self.keep_user_data(item, category)
 
@@ -338,7 +344,7 @@ def run_scan(loc: Optional[Locations] = None, progress: Optional[Callable[[str],
     loc = loc or Locations.detect()
     if progress:
         progress("Applications installées...")
-    app_list = apps.installed_apps(current_user=loc.current)
+    app_list = apps.remote_installed_apps(loc.host) if loc.remote else apps.installed_apps(current_user=loc.current)
     scanner = _Scanner(loc, progress, app_tokens(app_list))
     scanner.known_folders()
     scanner.home_extras()
@@ -349,12 +355,12 @@ def run_scan(loc: Optional[Locations] = None, progress: Optional[Callable[[str],
 
     if app_list and progress:
         progress("Correspondance avec winget...")
-    winget = apps.winget_map() if app_list else {}
+    winget = apps.winget_map() if (app_list and not loc.remote) else {}   # winget interroge CE poste : inutile pour un autre
     for app in app_list:
         app["winget_id"] = winget.get(app["name"], "")
         app["winget_guess"] = "" if app["winget_id"] or app.get("component") else apps.guess_winget(app["name"])
 
-    sysinfo = system.collect_all(loc.appdata, loc.current) if with_system and is_windows() else {}
+    sysinfo = system.collect_all(loc.appdata, loc.current) if (with_system and is_windows() and not loc.remote) else {}
     installer_info = collect_installers(scanner, app_list, sysinfo)
 
     sink = scanner.sink
@@ -371,13 +377,15 @@ def run_scan(loc: Optional[Locations] = None, progress: Optional[Callable[[str],
         "meta": {
             "tool_version": __version__,
             "date": datetime.now().isoformat(timespec="seconds"),
-            "machine": platform.node(),
+            "machine": loc.host if loc.remote else platform.node(),
             "user": (os.environ.get("USERNAME") or os.environ.get("USER") or "") if loc.current else loc.user,
             "domain": os.environ.get("USERDOMAIN", "") if loc.current else "",
-            "os": platform.platform(),
+            "os": "Windows (analyse à distance)" if loc.remote else platform.platform(),
             "windows": is_windows(),
             "home": loc.home,
             "profile_current": loc.current,
+            "remote": loc.remote,
+            "apps_read": bool(app_list),
         },
         "items": [it.to_dict() for it in scanner.items],
         "apps": app_list,

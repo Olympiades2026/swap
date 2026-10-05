@@ -3,10 +3,14 @@
 import http.client
 import json
 import os
+import shutil
+import ssl
+import subprocess
 import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from test_swap import make_profile, read, write
 
@@ -406,6 +410,161 @@ class WebTests(unittest.TestCase):
         self.assertFalse(self.app.busy())
         self.app.touch()
         self.assertLess(time.monotonic() - self.app.last_activity, 1)
+
+
+class ServerModeTests(unittest.TestCase):
+    """swap hébergé sur un serveur : mot de passe, PC source et PC cible distants (simulés par des dossiers)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.pcs = {}
+        for name, user in (("TPSEL023", "RFRH7752"), ("TPSEL045", "RFRH7752")):
+            root = os.path.join(self.tmp.name, name)
+            os.makedirs(os.path.join(root, "Users", user))
+            self.pcs[name] = root
+        src = self.pcs["TPSEL023"]
+        write(os.path.join(src, "Users", "RFRH7752", "Documents", "rapport.docx"), "rapport")
+        write(os.path.join(src, "Users", "RFRH7752", "Desktop", "note.txt"), "note")
+        write(os.path.join(src, "Users", "RFRH7752", "AppData", "Roaming", "Notepad++", "config.xml"), "<cfg/>")
+        write(os.path.join(src, "disque-C", "Projets", "app", "main.py"), "print(1)")
+        write(os.path.join(src, "disque-C", "Windows", "system.dll"), "sys")
+        self.session = Session(os.path.join(self.tmp.name, "sortie"))
+        self.session.remote_users_base = lambda host: os.path.join(self.pcs[host.upper()], "Users")
+        self.session.remote_drive_root = lambda host, d: os.path.join(self.pcs[host.upper()], "disque-" + d.upper().rstrip(":"))
+        self.app = web.WebApp(self.session, server=True)
+
+    def start(self, password=None, **kw):
+        self.server, self.token = web.make_server(self.app, 0, "127.0.0.1", password, **kw)
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+        self.addCleanup(lambda: (self.server.shutdown(), self.server.server_close()))
+
+    def req(self, method, path, body=None, headers=None, secure=False):
+        conn = (http.client.HTTPSConnection("localhost", self.port, context=ssl._create_unverified_context(), timeout=30) if secure
+                else http.client.HTTPConnection("127.0.0.1", self.port, timeout=30))
+        conn.request(method, path, body=body, headers=headers or {})
+        r = conn.getresponse()
+        data = r.read()
+        out = (r.status, data, dict(r.getheaders()))
+        conn.close()
+        return out
+
+    def wait_job(self):
+        end = time.time() + 30
+        while time.time() < end:
+            job = self.app.api_status({})["job"]
+            if job and not job["running"]:
+                return job
+            time.sleep(0.05)
+        self.fail("tâche trop longue")
+
+    # -- migration d'un PC distant vers un autre PC distant ------------------------------------------------
+    def test_scan_remote_source_then_install_on_remote_target(self):
+        self.app.api_scan({"source_host": "TPSEL023", "source_user": "RFRH7752"})
+        job = self.wait_job()
+        self.assertIsNone(job["error"], job)
+        inv = self.session.inv
+        self.assertEqual((inv["meta"]["machine"], inv["meta"]["user"], inv["meta"]["remote"]), ("TPSEL023", "RFRH7752", True))
+        self.assertTrue(any("À DISTANCE" in a["text"] and "n'a pas pu être lue" in a["text"] for a in inv["advice"]))
+        by_id = {i["id"]: i for i in inv["items"]}
+        self.assertIn("dossier-documents", by_id)
+        projets = by_id["disque-c-projets"]                                   # dossier à la racine du disque C: du PC source
+        self.assertEqual(projets["label"], "C:\\Projets")
+        self.assertEqual(projets["target"], {"kind": "abs", "path": "C:\\Projets"})   # cible portable, pas un chemin réseau
+        self.assertNotIn("disque-c-windows", by_id)                           # dossiers système jamais proposés
+        self.assertTrue(by_id["config-notepadpp"]["src"].startswith(self.pcs["TPSEL023"]))
+
+        self.app.api_send({"mode": "remote", "host": "TPSEL045", "user": "RFRH7752"})
+        job = self.wait_job()
+        self.assertIsNone(job["error"], job)
+        dst = self.pcs["TPSEL045"]
+        self.assertEqual(read(os.path.join(dst, "Users", "RFRH7752", "Documents", "rapport.docx")), "rapport")
+        self.assertEqual(read(os.path.join(dst, "Users", "RFRH7752", "Desktop", "note.txt")), "note")
+        self.assertEqual(read(os.path.join(dst, "Users", "RFRH7752", "AppData", "Roaming", "Notepad++", "config.xml")), "<cfg/>")
+        self.assertEqual(read(os.path.join(dst, "disque-C", "Projets", "app", "main.py")), "print(1)")   # C:\\Projets recréé sur le PC cible
+        self.assertTrue(os.path.exists(os.path.join(dst, "disque-C", "SWAP", "SWAP-TPSEL023", "installer_et_configurer.ps1")))
+        # le PC source n'a pas bougé et rien n'a été écrit sur le serveur lui-même
+        self.assertEqual(read(os.path.join(self.pcs["TPSEL023"], "disque-C", "Projets", "app", "main.py")), "print(1)")
+
+    def test_remote_source_errors_are_clear(self):
+        with self.assertRaises(web.ApiError):
+            self.app.api_scan({"source_host": ""})                              # en mode serveur, le PC source est obligatoire
+        self.app.api_scan({"source_host": "TPSEL023", "source_user": ""})
+        self.assertIn("utilisateur", self.wait_job()["error"])
+        self.app.api_scan({"source_host": "TPSEL023", "source_user": "personne"})
+        self.assertIn("n'existe pas", self.wait_job()["error"])
+
+    def test_source_host_equal_to_this_machine_means_local(self):
+        import platform
+
+        self.session.set_source(platform.node().upper(), "", "")
+        self.assertEqual(self.session.source_host, "")
+
+    def test_state_says_server_mode_and_hides_quit(self):
+        self.start("motdepasse1")
+        self.assertTrue(self.app.api_state({})["server"])
+
+    # -- mot de passe ----------------------------------------------------------------------------------------
+    def login(self, password="motdepasse1"):
+        return self.req("POST", "/login", "password=" + password, {"Content-Type": "application/x-www-form-urlencoded", "Host": f"127.0.0.1:{self.port}"})
+
+    def test_login_required_then_cookie_gives_access(self):
+        self.start("motdepasse1")
+        status, body, _ = self.req("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"Mot de passe", body)
+        self.assertNotIn(self.token.encode(), body)                              # la page n'est pas servie sans connexion
+        self.assertEqual(self.req("GET", "/api/state", headers={"X-Swap-Token": self.token})[0], 401)
+        with mock.patch("swap.web.time.sleep"):
+            self.assertEqual(self.login("mauvais")[0], 401)
+        status, _, headers = self.login()
+        self.assertEqual(status, 303)
+        cookie = headers["Set-Cookie"]
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=Strict", cookie)
+        sid = cookie.split(";")[0]
+        status, body, _ = self.req("GET", "/", headers={"Cookie": sid})
+        self.assertIn(self.token.encode(), body)
+        status, body, _ = self.req("GET", "/api/state", headers={"Cookie": sid, "X-Swap-Token": self.token})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["server"])
+        self.assertEqual(self.req("GET", "/api/state", headers={"Cookie": sid})[0], 403)    # le jeton reste exigé en plus
+        self.assertEqual(self.req("POST", "/api/quit", "{}", {"Cookie": sid, "X-Swap-Token": self.token})[0], 403)   # pas d'arrêt à distance
+        self.req("GET", "/logout", headers={"Cookie": sid})
+        self.assertEqual(self.req("GET", "/api/state", headers={"Cookie": sid, "X-Swap-Token": self.token})[0], 401)
+
+    def test_too_many_wrong_passwords_lock_the_login(self):
+        self.start("motdepasse1")
+        with mock.patch("swap.web.time.sleep"):
+            codes = [self.login("faux")[0] for _ in range(6)]
+            self.assertEqual(codes[-1], 429)
+            self.assertEqual(self.login()[0], 429)                               # même le bon mot de passe, pendant le blocage
+
+    def test_cross_origin_request_is_refused_even_with_password(self):
+        self.start("motdepasse1")
+        sid = self.login()[2]["Set-Cookie"].split(";")[0]
+        status, _, _ = self.req("POST", "/api/options", "{}", {"Cookie": sid, "X-Swap-Token": self.token, "Origin": "http://evil.example.com"})
+        self.assertEqual(status, 403)
+
+    def test_listening_beyond_this_machine_requires_a_password(self):
+        with self.assertRaises(ValueError):
+            web.make_server(self.app, 0, "0.0.0.0", None)
+        server, _ = web.make_server(self.app, 0, "0.0.0.0", "motdepasse1")
+        server.server_close()
+
+    @unittest.skipUnless(shutil.which("openssl"), "openssl absent")
+    def test_https_with_certificate(self):
+        cert, key = os.path.join(self.tmp.name, "c.pem"), os.path.join(self.tmp.name, "k.pem")
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert, "-days", "1", "-subj", "/CN=localhost"],
+                       check=True, capture_output=True)
+        self.start("motdepasse1", certfile=cert, keyfile=key)
+        status, body, _ = self.req("GET", "/", secure=True)
+        self.assertEqual(status, 200)
+        self.assertIn(b"Mot de passe", body)
+        status, _, headers = self.req("POST", "/login", "password=motdepasse1", {"Content-Type": "application/x-www-form-urlencoded"}, secure=True)
+        self.assertEqual(status, 303)
+        self.assertIn("Secure", headers["Set-Cookie"])
 
 
 if __name__ == "__main__":

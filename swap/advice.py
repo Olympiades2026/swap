@@ -83,11 +83,19 @@ def compute_advice(inv: dict) -> list:
 
     if sysinfo.get("credentials"):
         advice.append({"level": "info", "text": f"{len(sysinfo['credentials'])} identifiant(s) enregistré(s) dans le Gestionnaire d'identifiants Windows (partages, sites...) : à ressaisir sur le nouveau poste."})
-    if inv.get("meta", {}).get("windows") and inv.get("apps") and not inv.get("winget_available"):
+    if inv.get("meta", {}).get("windows") and inv.get("apps") and not inv.get("winget_available") and not inv.get("meta", {}).get("remote"):
         advice.append({"level": "info", "text": "winget n'est pas disponible sur ce poste : la liste des applications est à réinstaller à la main."})
 
     meta = inv.get("meta", {})
-    if meta.get("profile_current") is False:
+    if meta.get("remote"):
+        text = (f"Analyse faite À DISTANCE depuis le serveur, sur le profil « {meta.get('user', '?')} » de {meta.get('machine', '?')} : "
+                "les fichiers et la configuration des applications sont lus par le réseau. Imprimantes, lecteurs réseau, variables d'environnement, "
+                "certificats personnels, identifiants Windows et réglages du registre ne sont pas lisibles à distance.")
+        if not meta.get("apps_read", True):
+            text += (" La liste des applications n'a pas pu être lue (service « Registre à distance » arrêté et WinRM désactivé sur ce PC) : "
+                     "relevez-la à la main.")
+        advice.append({"level": "important", "text": text})
+    elif meta.get("profile_current") is False:
         advice.append({"level": "important", "text": (
             f"Analyse du profil « {meta.get('user', '?')} » faite depuis un autre compte : les fichiers et la configuration des "
             "applications sont bien listés, mais tout ce qui vit dans la session de cet utilisateur (clés de registre, lecteurs réseau, "

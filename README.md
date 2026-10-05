@@ -33,6 +33,21 @@ Le PC cible a besoin de l'outil (le même dossier `swap`, à copier une fois) et
 - Le port TCP **47800** doit être autorisé en entrée sur le PC cible (profil Domaine). La case « Ouvrir ce port dans le pare-feu » le fait pour vous si vous avez les droits administrateur, et le referme ensuite. Si votre entreprise filtre les flux entre postes, utilisez le partage Windows ou un disque.
 - Équivalent en ligne de commande : `python -m swap receive --dest C:\SWAP --firewall` (cible), puis `python -m swap copy --host TPSEL045 --code XXXXX-XXXXX` (source).
 
+## Mode serveur : tout depuis un navigateur, sans rien faire sur les deux PC
+
+swap est installé **une seule fois sur un serveur**. Depuis n'importe quel navigateur on choisit un PC source (nom + utilisateur) et un PC cible (nom + utilisateur), et le serveur copie tout directement de l'un à l'autre par les partages d'administration Windows (`\\PC\C$`). **Rien n'est lancé ni installé sur les deux PC.**
+
+1. Sur le serveur : double-clic sur `SERVEUR.bat` (ou `python -m swap server --port 8080 --firewall`). Un mot de passe est demandé (8 caractères minimum, ou `--password` / variable `SWAP_PASSWORD`). Laisser la fenêtre ouverte.
+2. Depuis un navigateur : `http://NOM-DU-SERVEUR:8080`, saisir le mot de passe.
+3. **Source** : nom du PC + *Charger* → choisir l'utilisateur → *Analyser*. Cocher ce qui doit migrer.
+4. **Cible** : nom du PC + *Charger* → choisir l'utilisateur → *Envoyer*. Les fichiers arrivent directement dans le profil choisi (sans écraser l'existant, sauf option).
+
+À savoir :
+- Le compte qui fait tourner le serveur doit être **administrateur des deux PC** (accès aux partages `C$`) ; les PC doivent être allumés et joignables (SMB, port 445). Le profil de l'utilisateur cible doit exister (il s'est connecté au moins une fois).
+- Ne peut pas se faire à distance : réglages du registre, installation des applications, imprimantes, lecteurs réseau, certificats, identifiants Windows. Le serveur dépose sur la cible un dossier `C:\SWAP\SWAP-<source>` avec le rapport et le script `installer_et_configurer.ps1` à lancer une fois sur le nouveau poste. La liste des applications de la source est lue au mieux (service « Registre à distance » ou WinRM).
+- Une seule migration à la fois. Mot de passe avec blocage après des essais ratés ; sans `--cert` / `--key` le trafic navigateur ↔ serveur est en **HTTP non chiffré** : à réserver à un réseau interne, ou fournir un certificat (`--cert c.pem --key k.pem`) pour du HTTPS.
+- Non testé sur de vrais postes Windows : essayer d'abord sur deux PC de test.
+
 ### Choisir l'utilisateur
 
 - **Analyse** : `python -m swap profiles` liste les profils ; `python -m swap scan --user jdupont` analyse celui de `jdupont`. Les dossiers (Bureau, Documents… y compris ceux redirigés vers OneDrive) et la configuration des applications du profil sont lus. Il faut être **administrateur** pour lire le profil d'un autre compte.
