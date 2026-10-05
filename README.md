@@ -48,6 +48,17 @@ swap est installé **une seule fois sur un serveur**. Depuis n'importe quel navi
 - Une seule migration à la fois. Mot de passe avec blocage après des essais ratés ; sans `--cert` / `--key` le trafic navigateur ↔ serveur est en **HTTP non chiffré** : à réserver à un réseau interne, ou fournir un certificat (`--cert c.pem --key k.pem`) pour du HTTPS.
 - Non testé sur de vrais postes Windows : essayer d'abord sur deux PC de test.
 
+### Avec WAMP (Apache en façade)
+
+Si le serveur a déjà WAMP, Apache peut servir de porte d'entrée (même adresse que vos autres sites, HTTPS possible, journaux Apache). swap est écrit en Python : WAMP (Apache + PHP + MySQL) ne l'exécute pas lui-même, il **relaie** les requêtes vers le petit serveur Python qui tourne en local. PHP et MySQL ne servent pas ici. Python 3.9+ reste nécessaire sur le serveur.
+
+1. WAMP > Apache > Modules Apache : cocher `headers_module`, `proxy_module`, `proxy_http_module`.
+2. Ajouter à la fin de `httpd-vhosts.conf` (dans `bin\apache\apacheX.Y.Z\conf\extra`) : `Include "C:/swap/wamp/swap-apache.conf"` (adapter le chemin).
+3. Lancer `SERVEUR-WAMP.bat` (swap écoute seulement sur `127.0.0.1:8765`, inaccessible depuis le réseau sans Apache) ; redémarrer Apache.
+4. Ouvrir `http://NOM-DU-SERVEUR:8080`. Le mot de passe et le reste fonctionnent comme ci-dessus. Pour du HTTPS, mettre votre certificat dans le vhost (voir les commentaires de `wamp/swap-apache.conf`) : swap détecte alors le HTTPS et marque le cookie `Secure`.
+
+Pour que swap démarre avec Windows : `schtasks /create /tn swap /sc onstart /ru "DOMAINE\compte-admin" /rp * /tr "py -3 -m swap server --proxy --listen 127.0.0.1 --port 8765 --password MOTDEPASSE"` (le compte doit être administrateur des PC source et cible). Dans ce mode la page n'est pas une page PHP : elle est servie à la racine d'un site dédié (port 8080), pas dans un sous-dossier `www\swap`.
+
 ### Choisir l'utilisateur
 
 - **Analyse** : `python -m swap profiles` liste les profils ; `python -m swap scan --user jdupont` analyse celui de `jdupont`. Les dossiers (Bureau, Documents… y compris ceux redirigés vers OneDrive) et la configuration des applications du profil sont lus. Il faut être **administrateur** pour lire le profil d'un autre compte.

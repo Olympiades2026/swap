@@ -553,6 +553,24 @@ class ServerModeTests(unittest.TestCase):
         server, _ = web.make_server(self.app, 0, "0.0.0.0", "motdepasse1")
         server.server_close()
 
+    def test_behind_apache_proxy(self):
+        with self.assertRaises(ValueError):
+            web.make_server(self.app, 0, "0.0.0.0", "motdepasse1", proxy=True)     # seul Apache doit pouvoir joindre swap
+        self.start("motdepasse1", proxy=True)
+        form = {"Content-Type": "application/x-www-form-urlencoded"}
+        fwd = {"X-Forwarded-Proto": "https", "X-Forwarded-Host": "swap.exemple.fr", "Host": "127.0.0.1:%d" % self.port}
+        # cookie Secure car Apache a terminé le HTTPS ; origine comparée au nom public du site
+        status, _, headers = self.req("POST", "/login", "password=motdepasse1", dict(form, Origin="https://swap.exemple.fr", **fwd))
+        self.assertEqual(status, 303)
+        self.assertIn("Secure", headers["Set-Cookie"])
+        self.assertEqual(self.req("POST", "/login", "password=motdepasse1", dict(form, Origin="https://evil.example", **fwd))[0], 403)
+        # le blocage après échecs vise l'adresse réelle transmise par Apache, pas 127.0.0.1 pour tout le monde
+        with mock.patch("swap.web.time.sleep"):
+            for _ in range(5):
+                self.req("POST", "/login", "password=faux", dict(form, **{"X-Forwarded-For": "10.0.0.9"}))
+            self.assertEqual(self.req("POST", "/login", "password=motdepasse1", dict(form, **{"X-Forwarded-For": "10.0.0.9"}))[0], 429)
+            self.assertEqual(self.req("POST", "/login", "password=motdepasse1", dict(form, **{"X-Forwarded-For": "10.0.0.10"}))[0], 303)
+
     @unittest.skipUnless(shutil.which("openssl"), "openssl absent")
     def test_https_with_certificate(self):
         cert, key = os.path.join(self.tmp.name, "c.pem"), os.path.join(self.tmp.name, "k.pem")

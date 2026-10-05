@@ -493,6 +493,7 @@ class Handler(BaseHTTPRequestHandler):
     sessions: set = set()
     fails: dict = {}
     secure_cookie = False
+    proxy = False                        # derrière un proxy inverse local (Apache de WAMP) : on lit ses en-têtes X-Forwarded-*
 
     def log_message(self, *_a) -> None:  # silence
         pass
@@ -518,6 +519,8 @@ class Handler(BaseHTTPRequestHandler):
         host = self.headers.get("Host", "")
         origin = self.headers.get("Origin")
         if self.password is not None:   # mode serveur : le mot de passe protège ; on exige seulement une origine identique
+            if self.proxy:
+                host = self.headers.get("X-Forwarded-Host", host).split(",")[0].strip()
             return origin is None or origin.split("//", 1)[-1] == host
         if host not in self.hosts:      # contre le « DNS rebinding »
             return False
@@ -533,11 +536,21 @@ class Handler(BaseHTTPRequestHandler):
                 return value
         return ""
 
+    def _client_ip(self) -> str:
+        if self.proxy:  # le proxy local ajoute l'adresse réelle en dernier : seule celle-là est fiable
+            forwarded = self.headers.get("X-Forwarded-For", "").split(",")[-1].strip()
+            if forwarded:
+                return forwarded
+        return self.client_address[0]
+
+    def _https(self) -> bool:
+        return self.secure_cookie or (self.proxy and self.headers.get("X-Forwarded-Proto", "").lower() == "https")
+
     def _authed(self) -> bool:
         return self.password is None or self._cookie() in self.sessions
 
     def _login(self) -> None:
-        ip = self.client_address[0]
+        ip = self._client_ip()
         count, until = self.fails.get(ip, (0, 0.0))
         if until > time.monotonic():
             return self._send(429, LOGIN_PAGE.replace("__MSG__", '<p class="err">Trop d\'essais : patientez une minute.</p>').encode("utf-8"),
@@ -549,7 +562,7 @@ class Handler(BaseHTTPRequestHandler):
             self.fails.pop(ip, None)
             sid = secrets.token_urlsafe(24)
             self.sessions.add(sid)
-            flags = "; HttpOnly; SameSite=Strict; Path=/" + ("; Secure" if self.secure_cookie else "")
+            flags = "; HttpOnly; SameSite=Strict; Path=/" + ("; Secure" if self._https() else "")
             return self._send(303, b"", "text/plain", {"Location": "/", "Set-Cookie": f"{COOKIE}={sid}{flags}"})
         count += 1
         self.fails[ip] = (count, time.monotonic() + 60 if count >= 5 else 0.0)
@@ -635,8 +648,12 @@ class _Server(ThreadingHTTPServer):
 
 
 def make_server(app: WebApp, port: int = 0, listen: str = "127.0.0.1", password: Optional[str] = None,
-                certfile: str = "", keyfile: str = "") -> tuple:
-    """Crée le serveur ; renvoie (serveur, jeton). Hors 127.0.0.1, un mot de passe est obligatoire (refus sinon)."""
+                certfile: str = "", keyfile: str = "", proxy: bool = False) -> tuple:
+    """Crée le serveur ; renvoie (serveur, jeton). Hors 127.0.0.1, un mot de passe est obligatoire (refus sinon).
+
+    `proxy` : derrière Apache/WAMP ; n'est permis qu'en écoute locale, sinon n'importe qui pourrait falsifier X-Forwarded-*."""
+    if proxy and listen not in ("127.0.0.1", "localhost", "::1"):
+        raise ValueError("--proxy exige d'écouter sur 127.0.0.1 (seul Apache doit pouvoir joindre swap).")
     if listen not in ("127.0.0.1", "localhost", "::1") and not password:
         raise ValueError("Un mot de passe est obligatoire pour écouter ailleurs que sur ce poste.")
     token = secrets.token_urlsafe(18)
@@ -644,7 +661,7 @@ def make_server(app: WebApp, port: int = 0, listen: str = "127.0.0.1", password:
     real = server.server_address[1]
     server.RequestHandlerClass = type("SwapHandler", (Handler,), {
         "app": app, "token": token, "hosts": {f"127.0.0.1:{real}", f"localhost:{real}"}, "password": password or None,
-        "sessions": set(), "fails": {}, "secure_cookie": bool(certfile)})
+        "sessions": set(), "fails": {}, "secure_cookie": bool(certfile), "proxy": proxy})
     if certfile:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(certfile, keyfile or None)
@@ -667,7 +684,7 @@ def open_window(url: str) -> None:
 
 def run(out_dir: Optional[str] = None, backup: Optional[str] = None, port: int = 0, browser: bool = True, idle: int = 300,
         listen: str = "127.0.0.1", password: Optional[str] = None, certfile: str = "", keyfile: str = "", server: bool = False,
-        firewall: bool = False) -> int:
+        firewall: bool = False, proxy: bool = False) -> int:
     """Lance l'interface web.
 
     Poste local : s'arrête avec « Quitter », Ctrl+C, ou après `idle` secondes sans activité (0 = jamais).
@@ -677,7 +694,7 @@ def run(out_dir: Optional[str] = None, backup: Optional[str] = None, port: int =
         sys.stdout = sys.stderr = open(os.devnull, "w")
     app = WebApp(Session(out_dir) if out_dir else None, backup, server=server)
     try:
-        httpd, token = make_server(app, port, listen, password, certfile, keyfile)
+        httpd, token = make_server(app, port, listen, password, certfile, keyfile, proxy)
     except (OSError, ValueError, ssl.SSLError) as exc:
         print(f"Impossible de démarrer l'interface web : {exc}")
         return 1
@@ -690,7 +707,9 @@ def run(out_dir: Optional[str] = None, backup: Optional[str] = None, port: int =
     if server:
         scheme = "https" if certfile else "http"
         print(f"swap {__version__} — serveur de migration : {scheme}://{platform.node()}:{real}/  (écoute sur {listen})")
-        if not certfile:
+        if proxy:
+            print("Mode proxy : swap n'est joignable que par Apache (WAMP) ; l'adresse à ouvrir est celle du site Apache.")
+        elif not certfile:
             print("ATTENTION : sans --cert/--key, le mot de passe circule en clair sur le réseau (HTTP). Réseau interne uniquement.")
         print("Le compte Windows qui lance ce serveur doit être administrateur des PC source et cible. Ctrl+C pour arrêter.")
     else:

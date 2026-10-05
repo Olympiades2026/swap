@@ -312,7 +312,7 @@ def cmd_server(args) -> int:
     if len(password) < 8:
         print("Mot de passe trop court (8 caractères minimum).")
         return 2
-    return run(args.out, None, args.port, False, 0, args.listen, password, args.cert or "", args.key or "", True, args.firewall)
+    return run(args.out, None, args.port, False, 0, args.listen, password, args.cert or "", args.key or "", True, args.firewall, args.proxy)
 
 
 def cmd_gui(args) -> int:
@@ -377,6 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--password", help="mot de passe de l'interface (sinon variable SWAP_PASSWORD, sinon demandé)")
     sv.add_argument("--cert", help="certificat TLS (.pem) pour servir en HTTPS")
     sv.add_argument("--key", help="clé privée TLS (.pem)")
+    sv.add_argument("--proxy", action="store_true", help="derrière Apache/WAMP (proxy inverse) : écoute sur 127.0.0.1 uniquement, voir le dossier wamp")
     sv.add_argument("--firewall", action="store_true", help="ouvrir le port dans le pare-feu Windows pendant l'exécution (administrateur)")
     sv.set_defaults(func=cmd_server)
 
