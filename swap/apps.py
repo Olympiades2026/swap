@@ -45,7 +45,7 @@ def _read_uninstall(hive, view, scope: str) -> list:
     return apps
 
 
-def installed_apps() -> list:
+def installed_apps(current_user: bool = True) -> list:
     if not is_windows():
         return []
     import winreg
@@ -53,7 +53,12 @@ def installed_apps() -> list:
     apps = []
     apps += _read_uninstall(winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_64KEY, "machine")
     apps += _read_uninstall(winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_32KEY, "machine")
-    apps += _read_uninstall(winreg.HKEY_CURRENT_USER, 0, "utilisateur")
+    if current_user:  # les applications installées « pour l'utilisateur » d'un autre compte ne sont pas visibles d'ici
+        apps += _read_uninstall(winreg.HKEY_CURRENT_USER, 0, "utilisateur")
+    return _finalize(apps)
+
+
+def _finalize(apps: list) -> list:
     seen, unique = set(), []
     for app in apps:
         ident = (app["name"].lower(), app["version"])
@@ -64,6 +69,53 @@ def installed_apps() -> list:
             app["component"] = web_app or bool(COMPONENT_RE.search(app["name"]))
             unique.append(app)
     return sorted(unique, key=lambda a: a["name"].lower())
+
+
+# --- applications d'un AUTRE poste (lues à distance, sans rien y installer) ---------------------------------------
+REMOTE_KEYS = (r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall")
+
+
+def parse_reg_query(text: str) -> list:
+    """Sortie de `reg query <clé> /s` -> applications (même forme que la lecture locale du registre)."""
+    apps, cur = [], {}
+
+    def flush():
+        title = " ".join(str(cur.get("DisplayName", "")).split())
+        if (title and cur.get("SystemComponent") not in ("0x1", "1") and not cur.get("ParentKeyName") and not re.match(r"^KB\d+", title)
+                and str(cur.get("ReleaseType", "")).lower() not in ("update", "hotfix", "security update")):
+            apps.append({"name": title, "version": cur.get("DisplayVersion", ""), "publisher": cur.get("Publisher", ""),
+                         "install_date": cur.get("InstallDate", ""), "scope": "machine"})
+
+    for line in text.splitlines():
+        if line.upper().startswith(("HKEY_", "\\\\")):
+            flush()
+            cur = {}
+            continue
+        m = re.match(r"^\s+(\w+)\s+REG_\w+\s*(.*)$", line)
+        if m:
+            cur[m.group(1)] = m.group(2).strip()
+    flush()
+    return apps
+
+
+def remote_installed_apps(host: str) -> list:
+    """Applications installées sur le PC `host`, lues par le registre distant puis, à défaut, par PowerShell à distance.
+
+    Renvoie [] si aucun des deux n'est autorisé (service « Registre à distance » arrêté et WinRM désactivé)."""
+    from .util import powershell_json
+
+    apps = []
+    for key in REMOTE_KEYS:
+        apps += parse_reg_query(run(["reg", "query", "\\\\" + host + "\\HKLM\\" + key, "/s"], timeout=120))
+    if not apps:
+        keys = ",".join("'HKLM:\\" + k + "\\*'" for k in REMOTE_KEYS)
+        script = ("Invoke-Command -ComputerName '" + host.replace("'", "''") + "' -ErrorAction SilentlyContinue -ScriptBlock { Get-ItemProperty "
+                  + keys + " -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -and -not $_.SystemComponent -and -not $_.ParentKeyName } | "
+                  "Select-Object DisplayName,DisplayVersion,Publisher,InstallDate } | ConvertTo-Json -Compress")
+        for r in powershell_json(script, timeout=120):
+            apps.append({"name": " ".join(str(r.get("DisplayName", "")).split()), "version": str(r.get("DisplayVersion") or ""),
+                         "publisher": str(r.get("Publisher") or ""), "install_date": str(r.get("InstallDate") or ""), "scope": "machine"})
+    return _finalize([a for a in apps if a["name"] and not re.match(r"^KB\d+", a["name"])])
 
 
 def parse_winget_table(text: str) -> dict:
