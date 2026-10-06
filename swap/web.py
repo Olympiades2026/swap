@@ -515,16 +515,25 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, status: int, data: dict) -> None:
         self._send(status, json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
-    def _host_ok(self) -> bool:
+    def _host_error(self) -> str:
+        """'' si la requête est acceptée, sinon l'explication (affichée à l'utilisateur)."""
         host = self.headers.get("Host", "")
         origin = self.headers.get("Origin")
         if self.password is not None:   # mode serveur : le mot de passe protège ; on exige seulement une origine identique
             if self.proxy:
                 host = self.headers.get("X-Forwarded-Host", host).split(",")[0].strip()
-            return origin is None or origin.split("//", 1)[-1] == host
-        if host not in self.hosts:      # contre le « DNS rebinding »
-            return False
-        return origin is None or origin.split("//", 1)[-1] in self.hosts
+            if origin is None or origin.split("//", 1)[-1] == host:
+                return ""
+            return (f"Origine refusée : la page vient de « {origin} » mais le serveur est joint par « {host} ». Derrière Apache, activez "
+                    "« ProxyPreserveHost On » (voir wamp/swap-apache.conf) et lancez swap avec --proxy.")
+        if host in self.hosts and (origin is None or origin.split("//", 1)[-1] in self.hosts):   # contre le « DNS rebinding »
+            return ""
+        return (f"Hôte refusé : « {host} ». Cette interface locale (LANCER.bat, « swap web ») ne répond que sur "
+                f"{' ou '.join(sorted(self.hosts))}, ouverte sur le poste qui l'a lancée. Pour y accéder depuis le réseau "
+                "(nom du serveur, WAMP/Apache…), lancez swap en mode serveur : SERVEUR.bat ou SERVEUR-WAMP.bat.")
+
+    def _host_ok(self) -> bool:
+        return not self._host_error()
 
     def _query(self) -> dict:
         return {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
@@ -577,8 +586,9 @@ class Handler(BaseHTTPRequestHandler):
         self._route("POST")
 
     def _route(self, method: str) -> None:
-        if not self._host_ok():
-            return self._json(403, {"error": "Hôte refusé."})
+        problem = self._host_error()
+        if problem:
+            return self._json(403, {"error": problem})
         self.app.touch()
         path, query = urlparse(self.path).path, self._query()
         try:

@@ -553,6 +553,12 @@ class ServerModeTests(unittest.TestCase):
         server, _ = web.make_server(self.app, 0, "0.0.0.0", "motdepasse1")
         server.server_close()
 
+    def test_wrong_host_explains_how_to_fix(self):
+        self.start("motdepasse1")
+        status, body, _ = self.req("POST", "/login", "password=x", {"Origin": "http://autre:8080", "Content-Type": "application/x-www-form-urlencoded"})
+        self.assertEqual(status, 403)
+        self.assertIn("ProxyPreserveHost", json.loads(body)["error"])
+
     def test_behind_apache_proxy(self):
         with self.assertRaises(ValueError):
             web.make_server(self.app, 0, "0.0.0.0", "motdepasse1", proxy=True)     # seul Apache doit pouvoir joindre swap
